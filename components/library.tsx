@@ -41,14 +41,16 @@ export function Library() {
   return (
     <main className="site-shell">
       <header className="site-header">
-        <Button variant="outline" onClick={() => setFiltersOpen(true)}><Filter /> 分类</Button>
-        <a className="site-brand" href="/">PaperNotes</a>
-        <div className="header-search"><Search aria-hidden="true" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、关键词或观点…" aria-label="搜索论文笔记" /></div>
-        <div className="view-switch" aria-label="显示方式">
-          <Button variant={view === 'masonry' ? 'default' : 'outline'} size="sm" onClick={() => setView('masonry')}><Grid2X2 /> 瀑布</Button>
-          <Button variant={view === 'list' ? 'default' : 'outline'} size="sm" onClick={() => setView('list')}><List /> 列表</Button>
+        <div className="site-header-inner">
+          <Button variant="outline" onClick={() => setFiltersOpen(true)}><Filter /> 分类</Button>
+          <a className="site-brand" href="/">PaperNotes</a>
+          <div className="header-search"><Search aria-hidden="true" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、关键词或观点…" aria-label="搜索论文笔记" /></div>
+          <div className="view-switch" aria-label="显示方式">
+            <Button variant={view === 'masonry' ? 'default' : 'outline'} size="sm" onClick={() => setView('masonry')}><Grid2X2 /> 瀑布</Button>
+            <Button variant={view === 'list' ? 'default' : 'outline'} size="sm" onClick={() => setView('list')}><List /> 列表</Button>
+          </div>
+          <a className="github-link" href="https://github.com/TheRuabit/PaperNotes"><span>GitHub</span></a>
         </div>
-        <a className="github-link" href="https://github.com/TheRuabit/PaperNotes"><span>GitHub</span></a>
       </header>
 
       <Sheet open={filtersOpen} onOpenChange={setFiltersOpen}>
@@ -70,11 +72,13 @@ export function Library() {
         </SheetContent>
       </Sheet>
 
-      <section className="library-intro">
-        <div><p className="eyebrow">Personal reading library</p><h1>我的论文笔记</h1><p>按自己的问题意识，重组每一篇论文。</p></div>
-        <p className="paper-count"><BookOpenText aria-hidden="true" /> {papers.length} / {catalog.paperCount} 篇</p>
-      </section>
-      {papers.length ? <section className={`paper-collection ${view === 'list' ? 'is-list' : ''}`}>{papers.map((paper) => <PaperCard key={paper.slug} paper={paper} />)}</section> : <p className="empty-state">没有匹配的笔记。试试清除分类或换一个关键词。</p>}
+      <div className="library-main">
+        <section className="library-intro">
+          <div><p className="eyebrow">Personal reading library</p><h1>我的论文笔记</h1><p>按自己的问题意识，重组每一篇论文。</p></div>
+          <p className="paper-count"><BookOpenText aria-hidden="true" /> {papers.length} / {catalog.paperCount} 篇</p>
+        </section>
+        {papers.length ? <section className={`paper-collection ${view === 'list' ? 'is-list' : ''}`}>{papers.map((paper) => <PaperCard key={paper.slug} paper={paper} />)}</section> : <p className="empty-state">没有匹配的笔记。试试清除分类或换一个关键词。</p>}
+      </div>
     </main>
   );
 }
