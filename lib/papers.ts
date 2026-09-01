@@ -22,6 +22,12 @@ export type Paper = Omit<CatalogPaper, 'excerpt'> & {
   sections: Array<{ slug: string; title: string; markdown: string }>;
 };
 
+export type ReaderFontSize = 'small' | 'medium' | 'large';
+
+export function readerFontClass(size: ReaderFontSize) {
+  return `reader-font-${size}`;
+}
+
 export function filterPapers(
   papers: CatalogPaper[],
   query: string,

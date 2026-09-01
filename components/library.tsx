@@ -62,8 +62,8 @@ export function Library() {
             <div className="category-list">
               {Object.entries(catalog.categories).map(([category, count]) => (
                 <label key={category} className="category-option">
-                  <Checkbox checked={selected.has(category)} onCheckedChange={(checked) => toggleCategory(category, Boolean(checked))} />
-                  <span>{category}</span><small>{count}</small>
+                  <span className="category-name"><Checkbox checked={selected.has(category)} onCheckedChange={(checked) => toggleCategory(category, Boolean(checked))} /><span>{category}</span></span>
+                  <small className="category-count">{count}</small>
                 </label>
               ))}
             </div>

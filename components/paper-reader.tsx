@@ -7,7 +7,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import { ArrowLeft, ExternalLink } from 'lucide-react';
 
-import { loadPaper, type Paper } from '@/lib/papers';
+import { loadPaper, readerFontClass, type Paper, type ReaderFontSize } from '@/lib/papers';
 import 'katex/dist/katex.min.css';
 
 function ChapterLinks({ paper, className }: { paper: Paper; className: string }) {
@@ -17,6 +17,7 @@ function ChapterLinks({ paper, className }: { paper: Paper; className: string })
 export function PaperReader({ slug }: { slug: string }) {
   const [paper, setPaper] = useState<Paper | null>(null);
   const [failed, setFailed] = useState(false);
+  const [fontSize, setFontSize] = useState<ReaderFontSize>('medium');
 
   useEffect(() => { loadPaper(slug).then(setPaper).catch(() => setFailed(true)); }, [slug]);
 
@@ -24,12 +25,18 @@ export function PaperReader({ slug }: { slug: string }) {
   if (!paper) return <main className="paper-loading">正在加载笔记…</main>;
 
   return (
-    <main className="reader-shell">
+    <main className={`reader-shell ${readerFontClass(fontSize)}`}>
       <header className="paper-hero">
         <a className="back-link" href="/"><ArrowLeft aria-hidden="true" /> 返回笔记库</a>
         <p className="eyebrow">{paper.categories[0] ?? '未分类'}</p>
         <h1>{paper.title}</h1>
-        <div className="paper-details"><span>arXiv {paper.arxivId}</span>{paper.date && <span>{paper.date}</span>}<a href={paper.arxivUrl}>原论文 <ExternalLink aria-hidden="true" /></a>{paper.codeUrl && <a href={paper.codeUrl}>代码 <ExternalLink aria-hidden="true" /></a>}</div>
+        <div className="paper-details">
+          <div className="paper-meta-info"><span>arXiv {paper.arxivId}</span>{paper.date && <span>{paper.date}</span>}</div>
+          <div className="paper-actions">
+            <div className="font-size-switch" aria-label="正文字号"><span>正文</span>{(['small', 'medium', 'large'] as ReaderFontSize[]).map((size) => <button aria-pressed={fontSize === size} key={size} onClick={() => setFontSize(size)} type="button">{{ small: '小', medium: '中', large: '大' }[size]}</button>)}</div>
+            <a className="paper-link-button" href={paper.arxivUrl}>原论文 <ExternalLink aria-hidden="true" /></a>{paper.codeUrl && <a className="paper-link-button" href={paper.codeUrl}>代码 <ExternalLink aria-hidden="true" /></a>}
+          </div>
+        </div>
       </header>
 
       <div className="reader-sticky-bar">
