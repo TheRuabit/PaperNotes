@@ -74,7 +74,7 @@ export function Library() {
 
       <div className="library-main">
         <section className="library-intro">
-          <div><p className="eyebrow">Personal reading library</p><h1>我的论文笔记</h1><p>按自己的问题意识，重组每一篇论文。</p></div>
+          <div><p className="eyebrow">Personal reading library</p><h1>兔的论文笔记</h1><p>按自己的问题意识，重组每一篇论文。</p></div>
           <p className="paper-count"><BookOpenText aria-hidden="true" /> {papers.length} / {catalog.paperCount} 篇</p>
         </section>
         {papers.length ? <section className={`paper-collection ${view === 'list' ? 'is-list' : ''}`}>{papers.map((paper) => <PaperCard key={paper.slug} paper={paper} />)}</section> : <p className="empty-state">没有匹配的笔记。试试清除分类或换一个关键词。</p>}

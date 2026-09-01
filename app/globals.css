@@ -33,7 +33,7 @@
 
 :root {
   --radius: 1rem;
-  --background: #f2f1f5;
+  --background: #ffffff;
   --foreground: oklch(0.23 0.035 256);
   --card: oklch(1 0 0);
   --card-foreground: var(--foreground);
@@ -166,7 +166,7 @@ a { color: inherit; text-decoration: none; }
 
 @media (min-width: 700px) { .paper-collection { columns: 2; } }
 @media (min-width: 1120px) { .paper-collection { columns: 3; } }
-@media (min-width: 761px) { .site-header-inner { min-height: 5.5rem; gap: 1.25rem; padding-block: .5rem; } }
+@media (min-width: 761px) { .site-header-inner { min-height: 6.5rem; gap: 1.25rem; padding-block: .5rem; } }
 @media (max-width: 760px) {
   .site-header-inner { flex-wrap: wrap; padding: .75rem 0; }
   .site-brand { margin-right: auto; }
