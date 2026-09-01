@@ -7,11 +7,11 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { filterPapers, loadCatalog, type Catalog, type CatalogPaper } from '@/lib/papers';
+import { appPath, filterPapers, loadCatalog, type Catalog, type CatalogPaper } from '@/lib/papers';
 
 function PaperCard({ paper }: { paper: CatalogPaper }) {
   return (
-    <a className="paper-card" data-tone={paper.slug.charCodeAt(0) % 6} href={`/papers/${paper.slug}`}>
+    <a className="paper-card" data-tone={paper.slug.charCodeAt(0) % 6} href={appPath(`/papers/${paper.slug}.html`)}>
       <p className="paper-card-meta">{paper.categories[0] ?? '未分类'} · {paper.date ?? '日期未标注'}</p>
       <h2>{paper.title}</h2>
       <p className="paper-card-excerpt">{paper.excerpt}</p>
@@ -43,7 +43,7 @@ export function Library() {
       <header className="site-header">
         <div className="site-header-inner">
           <Button variant="outline" onClick={() => setFiltersOpen(true)}><Filter /> 分类</Button>
-          <a className="site-brand" href="/">PaperNotes</a>
+          <a className="site-brand" href={appPath('/')}>PaperNotes</a>
           <div className="header-search"><Search aria-hidden="true" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、关键词或观点…" aria-label="搜索论文笔记" /></div>
           <div className="view-switch" aria-label="显示方式">
             <Button variant={view === 'masonry' ? 'default' : 'outline'} size="sm" onClick={() => setView('masonry')}><Grid2X2 /> 瀑布</Button>

@@ -9,6 +9,7 @@ const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
 
 const hostingConfigUrl = new URL('./.openai/hosting.json', import.meta.url);
 const hasHostingConfig = existsSync(hostingConfigUrl);
+const isGitHubPages = process.env.GITHUB_ACTIONS === 'true';
 const hostingConfig = hasHostingConfig
   ? JSON.parse(readFileSync(hostingConfigUrl, 'utf8'))
   : {};
@@ -50,6 +51,7 @@ export default defineConfig(async () => {
   const { cloudflare } = await import('@cloudflare/vite-plugin');
 
   return {
+    base: isGitHubPages ? '/PaperNotes/' : '/',
     css: { postcss: { plugins: [tailwindcss()] } },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }

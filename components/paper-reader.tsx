@@ -7,7 +7,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import { ArrowLeft, ExternalLink } from 'lucide-react';
 
-import { loadPaper, readerFontClass, type Paper, type ReaderFontSize } from '@/lib/papers';
+import { appPath, loadPaper, readerFontClass, type Paper, type ReaderFontSize } from '@/lib/papers';
 import 'katex/dist/katex.min.css';
 
 function ChapterLinks({ paper, className }: { paper: Paper; className: string }) {
@@ -27,7 +27,7 @@ export function PaperReader({ slug }: { slug: string }) {
   return (
     <main className={`reader-shell ${readerFontClass(fontSize)}`}>
       <header className="paper-hero">
-        <a className="back-link" href="/"><ArrowLeft aria-hidden="true" /> 返回笔记库</a>
+        <a className="back-link" href={appPath('/')}><ArrowLeft aria-hidden="true" /> 返回笔记库</a>
         <p className="eyebrow">{paper.categories[0] ?? '未分类'}</p>
         <h1>{paper.title}</h1>
         <div className="paper-details">

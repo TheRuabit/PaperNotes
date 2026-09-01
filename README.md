@@ -38,4 +38,4 @@ tests/          基础行为测试
 
 ## GitHub Actions
 
-每次推送到 `main` 或创建面向 `main` 的 Pull Request，GitHub Actions 都会安装锁定依赖、运行测试并构建网站。工作流不部署网站，也不使用任何密钥。
+每次推送到 `main` 或创建面向 `main` 的 Pull Request，GitHub Actions 都会安装锁定依赖、运行测试并构建网站。推送至 `main` 后还会把 `dist/client` 发布到 GitHub Pages；不使用任何密钥。

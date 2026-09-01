@@ -1,16 +1,21 @@
-name: Verify
+name: Deploy GitHub Pages
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
 jobs:
-  verify:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -18,6 +23,24 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/configure-pages@v5
       - run: npm ci
       - run: node --experimental-strip-types --test tests/library.test.ts tests/reader-font.test.ts
       - run: npm run build
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist/client
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

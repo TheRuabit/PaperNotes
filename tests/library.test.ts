@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import * as papersLib from '../lib/papers.ts';
 import { filterPapers, type CatalogPaper } from '../lib/papers.ts';
 
 const papers: CatalogPaper[] = [
@@ -32,4 +33,12 @@ test('filterPapers intersects category selection with a case-insensitive search'
   const shown = filterPapers(papers, 'KV', new Set(['KV Cache 压缩与驱逐']));
 
   assert.deepEqual(shown.map((paper) => paper.slug), ['memdecay']);
+});
+
+test('assetPath keeps public JSON inside a GitHub Pages project path', () => {
+  const assetPath = (papersLib as typeof papersLib & {
+    assetPath?: (basePath: string, path: string) => string;
+  }).assetPath;
+
+  assert.equal(assetPath?.('/PaperNotes/', '/data/catalog.json'), '/PaperNotes/data/catalog.json');
 });

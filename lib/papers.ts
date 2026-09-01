@@ -24,6 +24,12 @@ export type Paper = Omit<CatalogPaper, 'excerpt'> & {
 
 export type ReaderFontSize = 'small' | 'medium' | 'large';
 
+export function assetPath(basePath: string, path: string) {
+  return `${basePath.replace(/\/?$/, '/')}${path.replace(/^\//, '')}`;
+}
+
+export const appPath = (path: string) => assetPath(import.meta.env?.BASE_URL ?? '/', path);
+
 export function readerFontClass(size: ReaderFontSize) {
   return `reader-font-${size}`;
 }
@@ -47,5 +53,5 @@ async function loadJson<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export const loadCatalog = () => loadJson<Catalog>('/data/catalog.json');
-export const loadPaper = (slug: string) => loadJson<Paper>(`/data/papers/${encodeURIComponent(slug)}.json`);
+export const loadCatalog = () => loadJson<Catalog>(appPath('/data/catalog.json'));
+export const loadPaper = (slug: string) => loadJson<Paper>(appPath(`/data/papers/${encodeURIComponent(slug)}.json`));
