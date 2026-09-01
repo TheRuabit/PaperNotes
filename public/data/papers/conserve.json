@@ -1,0 +1,60 @@
+{
+  "slug": "conserve",
+  "title": "ConServe: Fine-Grained GPU Harvesting for LLM Online and Offline Co-Serving",
+  "arxivId": "2410.01228v2",
+  "arxivUrl": "https://arxiv.org/abs/2410.01228",
+  "date": "2025-09-03",
+  "codeUrl": null,
+  "categories": [
+    "LLM 集群调度"
+  ],
+  "keywords": [
+    "在线离线共服务",
+    "token 调度",
+    "layer-wise 抢占",
+    "增量 KV checkpoint"
+  ],
+  "read": true,
+  "sections": [
+    {
+      "slug": "task",
+      "title": "Task",
+      "markdown": "在线 LLM serving 必须按突发峰值预留 GPU，以满足 P99 TTFT 和 TBT；低谷期却会留下短至毫秒级的 compute 与 KV-cache 空间。离线 batch inference（benchmark、QA、摘要）可容忍暂停且与在线请求使用同一模型，因此可作为 backfill workload；但将其直接放进 continuous batch 会使在线请求遭受 compute / memory contention、整 iteration 的 head-of-line blocking，以及 request-level KV swap 或重算。（论文 §1、§3.2）\n\n论文把问题定义为：在共享一个 inference engine 的前提下，如何回收在线服务的闲置 GPU 周期与显存，同时让在线请求持续满足 TTFT/TBT SLO，并使离线任务有可观进度。关键约束不是离线任务能否被抢占，而是 scheduler、GPU executor、KV cache 生命周期分别仍以 chunk/request/iteration 为单位，无法在一个短在线 burst 到来时同时限制干扰、迅速停止计算并低代价恢复状态。（论文 §1、§3.2、§4.1）"
+    },
+    {
+      "slug": "insight",
+      "title": "Insight",
+      "markdown": "1. **co-serving 的控制单位必须小于 request 和 iteration**：固定 chunk 只限制 token 数，不能反映 context/KV cache 增长对 iteration latency 的影响；离线 token 的可 admission 数必须随当前 compute tokens 与 resident context 动态变化。（论文 §1、§4.2）\n2. **TTFT 风险来自 in-flight offline batch 的不可中断性**：在线请求到达后，等待当前整次 forward 完成可达数百毫秒；在 Transformer layer 边界设置 safepoint，才可把回收延迟缩短到若干 layer 的执行时间。（论文 §1、§4.3、§6.5）\n3. **KV cache 是 append-only 状态，checkpoint 不必随 request 历史一起移动**：generation step 后仅新增一个 token 的 KV；逐 token 异步 checkpoint 与预取可把一次性 swap 的 I/O 峰值摊到多次 iteration，并使恢复与下一 batch 的计算重叠。（论文 §1、§4.4）"
+    },
+    {
+      "slug": "novelty",
+      "title": "Novelty",
+      "markdown": "**有新意：**\n\n- **SLO-aware token-level co-serving scheduler**：以 $(P,C)$ 的 context-aware latency profile 为每个 iteration 计算离线 token budget，而不是沿用固定 chunk size；online request 先入 batch，余下 TBT slack 再分给 offline request。（论文 §4.2）\n- **layer-wise preemption 与 LLM execution 的联合实现**：在 Transformer layer 之间插入 safepoint，monitor thread 用 TTFT 预测触发抢占；TP 下先用 `ncclBroadcast` 同步全部 worker，避免部分 worker 中断 collective。（论文 §4.3）\n- **incremental KV checkpointing / prefetching**：将 request 的 KV 生命周期解耦为 token 状态，持续保存新增 KV，preemption 时按需释放 GPU token blocks，恢复时异步预取；实现对齐 vLLM 的 16-token page。（论文 §4.4、§5）\n\n**有限：**\n\n- continuous batching、chunked prefill、PagedAttention 式 KV page 管理和 offline profiling 分别来自 Orca、Sarathi、vLLM 等既有 serving 机制；本文将其用于 online/offline 共服务并在三个粒度上联动。（论文 §2、§4、§7）\n- layer-level safepoint 与通用 DNN 的 microsecond-scale preemption 有对应设计；本文新增的是在 autoregressive batch、CUDA Graph、tensor parallelism 和 request metadata 清理下的实现路径。（论文 §4.3、§7）\n- checkpoint / swap 与异步 CUDA stream 是已有 I/O 技术；本文的差异在于利用 KV append-only 性质按新 token 增量传输，而非按完整 request 迁移。（论文 §4.4、§5）"
+    },
+    {
+      "slug": "solution",
+      "title": "Solution",
+      "markdown": "### **Context-aware token-level scheduling**\n\n论文用 $P$ 表示当前 iteration 中实际计算的 token 数，用 $C$ 表示已驻留 KV cache 的 context token 数，并以离线 profiler 拟合如下加性 latency model：\n\n$$\n\\operatorname{Latency}(P,C)=k_1P+k_2P(P+C)+k_3P+k_4(P+C)+k_5.\n$$\n\n该式不是由 theorem 得到的闭式最优解，而是对 Transformer 各项运行成本的回归分解：$k_1P$ 对应 QKV/MLP 等线性 token compute；新 token 对已有与同批 token attention 的交互给出 $k_2P(P+C)$；TP collective 近似为 $k_3P$；读取 KV 的 memory-bound 成本为 $k_4(P+C)$；$k_5$ 收集每 iteration 固定 kernel / weight-loading 开销。profiler 在给定模型和硬件上扫描 $(P,C)$ 网格后以 polynomial regression 学得 $k_1\\ldots k_5$；70B profile 报告约 20 分钟、相对预测误差低于 4%。（论文 §4.2）\n\n每个 iteration，scheduler 先排入所有 online request，再对每个 offline request 调用 `can_schedule(batch, req, TBT)`；该接口返回当前 TBT 目标下还能接纳的 token 数，或返回 0。于是 admission 条件可写为 $\\operatorname{Latency}(P',C')\\leq\\mathrm{TBT}_{\\mathrm{SLO}}$，而 $P'$、$C'$ 包含候选离线 token 对 compute 与 KV 压力的增量。没有在线流量时，scheduler 改以该模型选择吞吐最大的 offline batch；有在线流量时，online priority 与预测预算共同限制离线工作。（论文 §4.2、§4.1）\n\n### **Layer-wise preemption**\n\nmonitor thread 在新 online request 到达时，估计新请求的执行时间 $t_{on}$ 及当前 batch 尚未执行的时间：\n\n$$\nt_{\\mathrm{remaining}}=\\operatorname{Profiler.estimate\\_exec\\_time}(B)-t_{\\mathrm{passed}}.\n$$\n\n当 $t_{\\mathrm{remaining}}+t_{on}>t_{\\mathrm{TTFT}}$ 时，它写入 host-memory preemption flag；worker 在 safepoint 读到 flag 后终止 batch 内所有 offline request 的后续 layer，清理对应 hidden states 与 attention metadata，并只以 online 请求完成余下执行。该判定直接来自 Algorithm 1：TTFT budget 由“当前 batch 剩余时间 + 新在线工作”组成，因而避免只等 iteration 结束后才重新调度。（论文 §4.3，Algorithm 1）\n\n实现把 safepoint 置于 Transformer layer 间；TP worker 先通过 `ncclBroadcast` 对齐再检查 flag，以保持 all-reduce 的同步顺序。每个检查由 pinned host-memory read（7 µs）及 NVLink barrier/broadcast（13 µs）构成；实验中每 4 layer 插入一次，4-GPU TP 时 safepoint 平均 167.2 µs、无抢占时总额外延迟 3.0 ms（1.1%），新请求可在 13 ms 内触发抢占。（论文 §4.3、§6.5）\n\n### **Incremental KV cache checkpointing and prefetching**\n\n对 request $r$，若第 $i$ 个 generation step 新增的 KV 为 $K_{r,i}$，则 append-only 性质表示历史块 $K_{r,<i}$ 不再修改。ConServe 在 step $i$ 后异步 checkpoint $K_{r,i}$ 到 host；抢占需要空间时，已 checkpoint 的 GPU blocks 可释放，而恢复 $r$ 时仅将缺失 blocks 在后台预取。与 request-level swap 的传输量 $\\sum_{j\\leq i}|K_{r,j}|$ 相比，单次 checkpoint 传输量为 $|K_{r,i}|$，连续 $i$ 步的总写入相同却被分散并与 model compute overlap。（论文 §4.4）\n\n可行性估计以 Qwen-2.5 14B 为例：每 token KV 为 192 KB，64 GB/s device-to-host 带宽可达\n\n$$\n\\frac{64\\times1024^2\\ \\mathrm{KB/s}}{192\\ \\mathrm{KB/token}}\\approx349\\mathrm{K\\ tokens/s},\n$$\n\n高于模型 generation throughput；论文测得 2048-token chunk 的传输约 10 ms。实现层面以 vLLM page size 为对齐单位管理 16 tokens，并在 virtual page table 扩展 GPU/CPU page mapping；gather kernel 把非连续 KV blocks 组成连续 buffer，checkpoint/pre-fetch 在独立 CUDA stream 运行，无需和默认 model stream 同步。（论文 §4.4、§5、§6.5）"
+    },
+    {
+      "slug": "flaw",
+      "title": "Flaw",
+      "markdown": "- **latency model 的参数跨环境范围未给出**：$k_1$（线性 compute）、$k_2$（attention）、$k_3$（TP communication）、$k_4$（KV memory access）、$k_5$（固定开销）控制 `can_schedule` 的 TBT budget，论文未列出系数值或 H100 以外的误差。70B 的离线 profile 用时约 20 分钟、报告误差低于 4%；若 GPU、TP 拓扑、context 分布或频率状态变化使实际 latency 高于估计值，离线 admission 会占用未被预测到的 TBT slack。（论文 §4.2、§6.1）\n- **safepoint 间隔固定为 4 layers**：该参数控制抢占响应与无抢占同步开销的交换，论文在 Llama-3.1 70B、4×H100 TP 上给出 167.2 µs 平均 safepoint、3.0 ms / 1.1% 总开销和 13 ms 抢占响应；未列出不同 layer 数、跨节点 TP 或其他 interval 的 sweep。更稀疏的间隔会增加最长等待层数，更密集的间隔会增加 synchronization 次数。（论文 §4.3、§6.5）\n- **KV checkpoint 的容量假设只在高 host-memory 余量下展示**：实现以 16-token page 为单位，实验节点提供 2 TB host memory 与 640 GB GPU memory；论文说明 host memory 耗尽时逐 token fallback 到 recomputation，但未报告受限 host memory、PCIe contention 或多 tenant 共用 host memory 的吞吐 / SLO 数据。192 KB/token（Qwen-2.5 14B）与 37 GB/s（Llama-3.1 8B）/132 GB/s（70B、4 GPU）传输带宽均来自该硬件设置。（论文 §4.4、§6.1、§6.5）\n- **workload 与 SLO 分布有限**：synthetic 主设置固定 Gamma arrival 的 CV=0.5、4096 input tokens、256 output tokens、2 req/s，并将 SLO 目标设为 Online-Only 的 P99 latency；真实在线数据为 BurstGPT 的一个 10 分钟片段，离线任务为 DuReader、MultiNews、VCSUM。论文改变 burstiness 和 request length，但未报告多租户优先级、不同 deadline class、output length distribution 与具体 batch-API deadline 的联合分布。（论文 §6.1、§6.2、§6.4）\n- **部署边界是同模型、同 engine 的 co-serving**：离线任务与在线任务复用已加载模型是设计前提，系统在 vLLM 0.8.4 上实现，评测只使用 1×H100 或 4×H100 TP（8B、14B、70B）。不同模型权重驻留、MoE routing、multi-node KV transfer、PD disaggregation 的网络队列不在实验范围；这些因素会改变 $C$ 的位置、safepoint 协调和 checkpoint 的 critical path。（论文 §1、§5、§6.1、§7）"
+    },
+    {
+      "slug": "thinking",
+      "title": "Thinking",
+      "markdown": "| 维度 | 评价 |\n| ---- | ---- |\n| 系统思维 | **强**：将 scheduler 的 token admission、executor 的 layer interrupt 和 state manager 的 KV 生命周期作为同一 SLO/throughput 问题的三个控制面，而非只替换 priority queue。（论文 §4.1） |\n| 控制论 | **强**：离线 profiler 提供 $\\operatorname{Latency}(P,C)$ 前馈预测；runtime 以 TBT budget 控制 token 数，以 monitor thread 根据 TTFT 余量触发抢占。（论文 §4.2–§4.3） |\n| 工程可部署性 | **强**：设计保留 vLLM page 结构并对 CUDA Graph、TP collective、独立 CUDA stream 给出实现；总代码改动为 9,169 行 Python/C++。（论文 §4.3、§5） |\n| 实验严谨性 | **中**：同时覆盖 8B、14B、70B、synthetic 与三类 offline workload，并提供 component ablation；环境集中在同一 DGX/H100/NVLink 配置。（论文 §6.1–§6.5） |\n| 泛化性 | **中**：论文讨论 host-memory exhausted 的逐 token fallback，且测量 1/4 GPU TP；模型异构、跨节点与多 deadline class 未列为实验设置。（论文 §4.4、§6.1） |\n\n思维层面的边界是控制器依赖单机 profile 与同一 engine 内可立即抢占的执行路径；当 latency 的主要来源改为 network transfer、host-memory contention 或 multi-model routing 时，现有 $(P,C)$ 状态变量不足以描述全部控制对象。（论文 §4.2、§4.4、§6.1）\n\n### 延伸方向\n\n1. **online calibration 与 uncertainty-aware admission**：将 profile residual、DVFS / thermal state、recent TBT miss 纳入 runtime model，并给 $\\operatorname{Latency}(P,C)$ 加入随预测误差变化的 safety margin。该方向可替代只在启动期得到一次性系数的路径。关键问题是 calibration probe 本身不能侵占在线 SLO slack，且需要在 workload shift 与短时噪声间区分更新信号。（论文 §4.2、§6.1）\n2. **host-memory 和存储层级控制**：把 CPU memory pressure、PCIe/NVLink bandwidth 和 checkpoint queue depth 纳入 token admission 状态，并将预取排程与未来恢复时间共同优化。该方向对应论文在 host memory 耗尽时的 token-level recomputation fallback。关键问题是 offline progress、CPU-memory 隔离和 online TBT 需由同一 admission policy 约束。（论文 §4.4、§5）\n3. **multi-node / disaggregated co-serving**：把 layer-wise preemption 接到 PD routing、跨节点 KV transfer 与 GPU ratio rebalancing；此时每个 token 的 $C$ 还包含所在节点和迁移队列。该设计可测试 ConServe 与 DistServe-P 的能力边界。关键问题是 NCCL / network collective 的同步粒度与单机 13 ms 抢占路径不同，TTFT budget 必须包含网络排队。（论文 §4.3、§6.2、§7）\n4. **多模型与 MoE 共服务**：在同一 GPU 上存在不同权重、adapter 或 expert residency 时，scheduler 可将 weight loading、expert placement 与 KV checkpoint 一并建模。该方向去除“online/offline 使用同一模型”的前提。关键问题是 offline token 的边际代价不再仅由 $P$、$C$ 决定，需处理 weight / expert cache 的驱逐顺序。（论文 §1、§4.2、§6.1）\n5. **多租户 SLO 与 batch-API deadline**：在线请求可有多档 TTFT/TBT，离线 job 可有完成 deadline、价格和 cancel policy；admission 目标可从总 offline tokens/s 扩展为带 deadline 的 goodput。该方向可评估低优先级离线任务在长期 burst 下的 starvation。关键问题是严格 online SLO 与离线 fairness 之间需要显式的 reservation 或 deficit-accounting 规则。（论文 §2.2、§6.1、§6.3）"
+    },
+    {
+      "slug": "核心数据",
+      "title": "核心数据",
+      "markdown": "- 摘要汇总：相对 state-of-the-art systems，平均 **2.2×** 更高吞吐、**2.9×** 更低 online tail latency。（论文 Abstract）\n- synthetic 全模型 / 多 request-rate 结果：ConServe 的 P99 TTFT、TBT 相对 Online-Only 平均分别在 **25%**、**19%** 内；离线吞吐平均达到 Non-Preemptive 上界的 **82.3%**，相对 Sarathi-P 平均 **3.0×**、最高 **7.48×**。（论文 §6.2）\n- SLO scale：当 $s>1$ 时，TTFT 与 TBT attainment 均超过 **99%**；无 slack 的 $s=1.0$ 下仍至少 **86%**，$s=1.5$ 时离线吞吐达到最优上界的平均 **93%**。（论文 §6.2）\n- Llama-3.1 70B 的 mixed real workload：ConServe P99 TTFT **1.14 s**、P99 TBT **201 ms**、offline throughput **1,553 tok/s**；Non-Preemptive 为 15.2 s / 450 ms / 1,995 tok/s，Sarathi-P 为 2.91 s / 441 ms / 895 tok/s。（论文 Table 2、§6.3）\n- 消融：SLO-aware scheduler 将 P99 TBT 从 **375 ms** 降至 **73 ms**、TTFT 从 **1,399 ms** 降至 **686 ms**；layer-wise preemption 再将 TTFT 降至 **523 ms**，incremental KV 使 offline throughput 从 **8,810** 提高到 **11,366 tok/s**（**1.29×**）。（论文 §6.5）"
+    },
+    {
+      "slug": "架构速览",
+      "title": "架构速览",
+      "markdown": "```text\nOnline requests ─────► monitor thread ── TTFT-risk check ──► preemption flag\n        │                                                              │\n        ▼                                                              ▼\n┌──────────────────────────────────────────────────────────────────────────────┐\n│ ConServe scheduler                                                            │\n│  1. schedule all online tokens                                                │\n│  2. profile Latency(P, C)                                                     │\n│  3. admit only offline tokens within residual TBT budget                      │\n└─────────────────────────────┬────────────────────────────────────────────────┘\n                              ▼\n                  vLLM executor / CUDA Graph\n                  safepoint every 4 layers\n                 ┌────────────┴────────────┐\n                 ▼                         ▼\n          online tokens continue     offline tokens stop\n                                           │\n                                           ▼\n    GPU KV (16-token pages) ── async checkpoint / prefetch ──► CPU KV\n             ▲                                  │\n             └───────── resume when memory is available ─────┘\n```\n\n**代码**：[ivanium/concerto](https://github.com/ivanium/concerto)（作者个人主页列出的 ConServe 公开代码仓库；基于 vLLM 的 fork）。"
+    }
+  ]
+}

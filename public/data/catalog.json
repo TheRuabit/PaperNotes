@@ -1,0 +1,339 @@
+{
+  "version": 1,
+  "paperCount": 19,
+  "categories": {
+    "KV Cache 压缩与驱逐": 4,
+    "Agent 推理优化": 8,
+    "LLM 集群调度": 5,
+    "KV Cache 分层缓存": 1
+  },
+  "papers": [
+    {
+      "slug": "arborkv",
+      "title": "ArborKV: Structure-Aware KV Cache Management for Scaling Tree-based LLM Reasoning",
+      "arxivId": "2605.22106",
+      "arxivUrl": "https://arxiv.org/abs/2605.22106",
+      "date": "2026-05-21",
+      "categories": [
+        "KV Cache 压缩与驱逐"
+      ],
+      "keywords": [
+        "树结构感知驱逐",
+        "MSVE 多信号估值",
+        "TAE 拓扑分配",
+        "lazy rehydration"
+      ],
+      "read": false,
+      "excerpt": "Tree-of-Thoughts (ToT) 等树搜索推理范式将 LLM 推理从单次生成转为显式多分支搜索，但 KV cache 的内存消耗随分支数量线性膨胀，在固定硬件预算下迅速触达 OOM，迫使开发者缩减搜索深度/宽度或批量大小。现有 KV cache 管理方法（H2O、StreamingLLM、ThinKV 等）均基于\"单条线性序列\"假设设计，将树结构扁平化处理，无法区分活跃分支与待回溯的非活跃子树，导致在回溯场景下误驱逐高价值节"
+    },
+    {
+      "slug": "augserve",
+      "title": "AugServe: Adaptive Request Scheduling for Augmented Large Language Model Inference Serving",
+      "arxivId": "2512.04013v3",
+      "arxivUrl": "https://arxiv.org/abs/2512.04013",
+      "date": "2025-12",
+      "categories": [
+        "Agent 推理优化"
+      ],
+      "keywords": [
+        "SLO 感知",
+        "tool 调用暂停",
+        "状态感知调度",
+        "动态 token budget"
+      ],
+      "read": true,
+      "excerpt": "Augmented LLM 在推理过程中调用外部工具（web API、数据库、专用模型）时，推理过程会暂停等待外部调用返回。现有推理系统（vLLM、INFERCEPT）采用 FCFS 调度，将外部调用视为请求中断或终止，导致严重的 Head-of-Line (HoL) 阻塞：长请求触发外部调用后占据 GPU 内存（或被 swap/discard），后续短请求被阻塞，queuing delay 超过 SLO，goodput 急剧下降。同时"
+    },
+    {
+      "slug": "cachewise",
+      "title": "CacheWise: Understanding Workloads and Optimizing KVCache Management for Efficiently Serving LLM Coding Agents",
+      "arxivId": "2606.16824",
+      "arxivUrl": "https://arxiv.org/abs/2606.16824",
+      "date": "2026-06-15",
+      "categories": [
+        "Agent 推理优化"
+      ],
+      "keywords": [
+        "Coding Agent",
+        "prefix-aware 调度",
+        "session 完成时间"
+      ],
+      "read": false,
+      "excerpt": "Coding Agent（如 Claude Code、SWE-agent）是一种快速增长的 LLM 应用形态：用户发出一条指令，LLM 自主规划并交替调用工具执行，形成闭循环 session。这类工作负载与传统 chatbot 有结构性差异——session 持续数十分钟到数小时、上下文持续膨胀、工具调起的请求比用户直接发起的多 20 倍（中位数）。然而，现有 LLM serving 系统（vLLM、SGLang、Mooncake）的设"
+    },
+    {
+      "slug": "conserve",
+      "title": "ConServe: Fine-Grained GPU Harvesting for LLM Online and Offline Co-Serving",
+      "arxivId": "2410.01228v2",
+      "arxivUrl": "https://arxiv.org/abs/2410.01228",
+      "date": "2025-09-03",
+      "categories": [
+        "LLM 集群调度"
+      ],
+      "keywords": [
+        "在线离线共服务",
+        "token 调度",
+        "layer-wise 抢占",
+        "增量 KV checkpoint"
+      ],
+      "read": true,
+      "excerpt": "在线 LLM serving 必须按突发峰值预留 GPU，以满足 P99 TTFT 和 TBT；低谷期却会留下短至毫秒级的 compute 与 KV-cache 空间。离线 batch inference（benchmark、QA、摘要）可容忍暂停且与在线请求使用同一模型，因此可作为 backfill workload；但将其直接放进 continuous batch 会使在线请求遭受 compute / memory contenti"
+    },
+    {
+      "slug": "hexagent",
+      "title": "HexAGenT: Efficient Agentic LLM Serving via Workflow- and Heterogeneity-Aware Scheduling",
+      "arxivId": "2605.16637v1",
+      "arxivUrl": "https://arxiv.org/abs/2605.16637",
+      "date": "2026-05-15",
+      "categories": [
+        "Agent 推理优化"
+      ],
+      "keywords": [
+        "workflow-aware 调度",
+        "异构 P-D 放置",
+        "online DAG",
+        "scaled-SLO"
+      ],
+      "read": false,
+      "excerpt": "Agentic LLM 的一次用户请求会展开为包含 LLM call、tool call、分支和汇合的 workflow；用户等待的是整个 workflow 的完成时间。论文将 workflow 表示为在线揭示的 DAG：到达时仅有 source node 可见，父节点或工具完成后才揭示子节点，因此调度器只能依据当前 runnable frontier 决策。（论文 §1、§4.1） 目标场景是 heterogeneous prefil"
+    },
+    {
+      "slug": "kv-rm",
+      "title": "KV-RM: Regularizing KV-Cache Movement for Static-Graph LLM Serving",
+      "arxivId": "2605.09735",
+      "arxivUrl": "https://arxiv.org/abs/2605.09735",
+      "date": "2026-05-10",
+      "categories": [],
+      "keywords": [],
+      "read": false,
+      "excerpt": "静态图 LLM 解码器提供可预测的启动、固定的张量形状和低提交开销，但在线解码暴露了高度不规则的 KV-cache 行为：请求长度不同、EOS 事件异步到达、逻辑历史随时间碎片化。动态运行时通过分页 KV 管理和步级调度恢复灵活性，而静态图执行器通常过度预留内存并遭受突发延迟异常值。论文研究是否可以在固定解码接口之下吸收大部分这种变异性。"
+    },
+    {
+      "slug": "kvserve",
+      "title": "KVServe: Service-Aware KV Cache Compression for Communication-Efficient Disaggregated LLM Serving",
+      "arxivId": "2605.13734",
+      "arxivUrl": "https://arxiv.org/abs/2605.13734",
+      "date": "2026-05-13",
+      "categories": [
+        "KV Cache 压缩与驱逐"
+      ],
+      "keywords": [
+        "服务感知压缩",
+        "动态策略选择",
+        "PD 分离"
+      ],
+      "read": false,
+      "excerpt": "解决分离式 LLM 推理中 KV cache 通信瓶颈问题。PD 分离和 KV 状态分离架构将 KV 从 GPU 内部状态变为跨网络传输的显式载荷，在典型云部署下（跨集群带宽 < 100 Gbps），KV 通信占 JCT 高达 60%。现有 KV 压缩方法（CacheGen、KIVI、DuoAttention 等）均为静态配置：固定的变换、量化粒度和编解码器。但生产环境的服务上下文（workload 类型、可用带宽、SLO 预算）持续变"
+    },
+    {
+      "slug": "lmetric",
+      "title": "Simple is Better: Multiplication May Be All You Need for LLM Request Scheduling",
+      "arxivId": "2603.15202",
+      "arxivUrl": "https://arxiv.org/abs/2603.15202",
+      "date": "2026-03-16",
+      "categories": [
+        "LLM 集群调度"
+      ],
+      "keywords": [
+        "乘法调度",
+        "P-token",
+        "免超参"
+      ],
+      "read": false,
+      "excerpt": "LLM 集群调度需要同时满足两个目标：(1) KV cache 感知——将请求路由到已有匹配 prefix 缓存的 instance 以减少 prefill 计算量；(2) 负载均衡——避免个别 instance 过载。现有方案（线性组合、filter-based、simulation-based）要么需要大量 workload-specific 的超参调优，要么依赖 per-model/per-hardware 的 simulator"
+    },
+    {
+      "slug": "mars",
+      "title": "MARS: Efficient, Adaptive Co-Scheduling for Heterogeneous Agentic Systems",
+      "arxivId": "2604.26963",
+      "arxivUrl": "https://arxiv.org/abs/2604.26963",
+      "date": "2026.04",
+      "categories": [
+        "Agent 推理优化"
+      ],
+      "keywords": [
+        "异构协同调度",
+        "SLO 感知",
+        "workflow 优化"
+      ],
+      "read": false,
+      "excerpt": "LLM serving 从单轮文本生成转向多轮 Agent 执行后，现有引擎架构假设崩塌： - Session 长生命周期化：反复在 GPU 推理 ↔ CPU tool 执行之间切换（论文 §2.2 Temporal Shift） - KV cache 状态化：驱逐要重建前缀，保留又挤占内存（论文 §2.1 Figure 3） - 优化目标转移：token 吞吐量 → 端到端 workflow 完成时间（论文 §2.1 Dynamic "
+    },
+    {
+      "slug": "memdecay",
+      "title": "MemDecay: Region-Aware KV Cache Eviction for Efficient LLM Agent Inference",
+      "arxivId": "2607.10582",
+      "arxivUrl": "https://arxiv.org/abs/2607.10582",
+      "date": "2026-07-12",
+      "categories": [
+        "KV Cache 压缩与驱逐"
+      ],
+      "keywords": [
+        "Agent 轨迹",
+        "区域感知驱逐",
+        "lifetime 差异"
+      ],
+      "read": false,
+      "excerpt": "LLM agent 的执行轨迹包含 system instructions、plans、user turns、tool outputs、retrieved documents、scratchpad reasoning 等异质内容，KV cache 随轨迹增长成为内存瓶颈。现有 eviction 策略（H2O、StreamingLLM 等）对所有 token 施加相同的 attention/recency 规则，完全忽略了 orchest"
+    },
+    {
+      "slug": "mpcache",
+      "title": "MPCache: MPC-Friendly KV Cache Eviction for Efficient Private LLM Inference",
+      "arxivId": "2501.06807",
+      "arxivUrl": "https://arxiv.org/abs/2501.06807",
+      "date": "2025-01",
+      "categories": [
+        "KV Cache 压缩与驱逐"
+      ],
+      "keywords": [
+        "MPC 隐私推理",
+        "token 重要性三分",
+        "聚类选择"
+      ],
+      "read": false,
+      "excerpt": "基于 MPC 的隐私 LLM 推理中，attention 计算（尤其 Softmax）在长序列下主导了延迟和通信开销。现有的 KV cache eviction 方法（H2O、StreamingLLM、LongCache 等）为明文推理设计，直接移植到 MPC 后反而引入更多开销——top-k 排序、token gathering、余弦相似度等操作在密文域代价极高。问题的核心矛盾是：KV cache eviction 减少了 atten"
+    },
+    {
+      "slug": "pbkv",
+      "title": "Efficient Serving for Dynamic Agent Workflows with Prediction-based KV-Cache Management",
+      "arxivId": "2605.06472v1",
+      "arxivUrl": "https://arxiv.org/abs/2605.06472",
+      "date": "2026-05-07",
+      "categories": [
+        "Agent 推理优化"
+      ],
+      "keywords": [
+        "动态 workflow",
+        "调用预测",
+        "KV 生命周期驱逐",
+        "保守预取"
+      ],
+      "read": true,
+      "excerpt": "Multi-agent workflow 中的 system prompt、工具/agent 描述和上游 agent 历史形成可跨 invocation 复用的 prefix KV cache；理想 hit rate 可超过 90%，但 GPU 容量有限。LRU 以空闲时间代替未来访问概率；在 tool call、agent 切换或 retry loop 造成的长空闲间隔中，会先逐出之后仍需复用的 cache。KVFlow 用静态 ag"
+    },
+    {
+      "slug": "queuellm",
+      "title": "A Queueing-Theoretic Framework for Stability Analysis of LLM Inference with KV Cache Memory Constraints",
+      "arxivId": "2605.04595",
+      "arxivUrl": "https://arxiv.org/abs/2605.04595",
+      "date": "2026-05-06",
+      "categories": [
+        "LLM 集群调度"
+      ],
+      "keywords": [
+        "排队论",
+        "KV cache 内存约束",
+        "稳定性分析",
+        "GPU provisioning"
+      ],
+      "read": false,
+      "excerpt": "LLM 推理服务的核心运维问题：给定请求到达率 λ，需要多少 GPU 才能保证系统稳定（队列不无限增长）？现有排队论模型只考虑计算瓶颈，忽略了 KV cache 带来的 GPU 内存约束。当内存成为紧约束时（长 prompt + 长生成），纯计算模型会严重高估服务能力，导致 under-provisioning。本文首次将 KV cache 内存约束显式纳入排队论框架，推导出闭式稳定性/不稳定性条件，并在真实 GPU 环境中验证。"
+    },
+    {
+      "slug": "smetric",
+      "title": "SMetric: Rethink LLM Scheduling for Serving Agents with Balanced Session-centric Scheduling",
+      "arxivId": "2607.08565",
+      "arxivUrl": "https://arxiv.org/abs/2607.08565",
+      "date": "2026-07-09",
+      "categories": [
+        "LLM 集群调度"
+      ],
+      "keywords": [
+        "Session-centric 调度",
+        "first-request 均衡",
+        "无状态 router"
+      ],
+      "read": true,
+      "excerpt": "论文研究面向 agent session 的 LLM 集群路由。Agent 仅在完整响应返回后继续执行，因此目标是满足 TTFT 与 TPOT SLO 的前提下最大化 cluster-wide TPS；同时，连续 turn 携带 append-only history，使 KV cache reuse 成为 prefill 成本的主要决定项。现有方法把 local-tier KV 命中与实例负载放入同一请求级评分，可能为 local h"
+    },
+    {
+      "slug": "strata",
+      "title": "Strata: Hierarchical Context Caching for Long Context Language Model Serving",
+      "arxivId": "2508.18572",
+      "arxivUrl": "https://arxiv.org/abs/2508.18572",
+      "date": "2025-08-26",
+      "categories": [
+        "KV Cache 分层缓存"
+      ],
+      "keywords": [
+        "GPU-assisted I/O",
+        "分层存储",
+        "长上下文"
+      ],
+      "read": false,
+      "excerpt": "长上下文 LLM 推理中，KV cache 占用远超 GPU HBM 容量，生产系统被迫采用跨 GPU HBM、CPU DRAM、磁盘的层级缓存。但将长上下文 KV cache 从低层存储搬回 GPU 时，两个结构性矛盾导致系统从 compute-bound 沦为 loading-bound：(1) PagedAttention 的小页（1–32 tokens）布局导致碎片化 I/O，实际 PCIe 带宽利用率仅 ~22%（PCIe 5"
+    },
+    {
+      "slug": "taper",
+      "title": "Regulating Branch Parallelism in LLM Serving",
+      "arxivId": "2605.06914",
+      "arxivUrl": "https://arxiv.org/abs/2605.06914",
+      "date": "2026-05-07",
+      "categories": [
+        "LLM 集群调度"
+      ],
+      "keywords": [
+        "分支并行",
+        "slack admission",
+        "SLO 保护",
+        "goodput"
+      ],
+      "read": true,
+      "excerpt": "Intra-request parallelism（IRP）把同一请求拆成可独立生成的 branches，以缩短单请求的 autoregressive critical path；但在 continuous batching 中，每个 admitted branch 都会扩宽共享 decode step。并行阶段的请求从更宽的 step 获得多分支进展，处于 serial stage 的同 batch 请求却只得到一个 token，并同"
+    },
+    {
+      "slug": "thunderagent",
+      "title": "ThunderAgent: A Simple, Fast and Program-Aware Agentic Inference System",
+      "arxivId": "2602.13692v2",
+      "arxivUrl": "https://arxiv.org/abs/2602.13692",
+      "date": "2026-03-10",
+      "categories": [
+        "Agent 推理优化"
+      ],
+      "keywords": [
+        "Program-aware 调度",
+        "全局等待队列",
+        "KV cache",
+        "工具生命周期"
+      ],
+      "read": true,
+      "excerpt": "多轮 agent 在 Reasoning 与 Acting 间交替，累积上下文使下一轮天然复用上一轮的 KV cache，且 Docker sandbox、端口、依赖等工具环境必须在整条轨迹内持续可用。现有部署将 vLLM/SGLang 与 Kubernetes 等工具编排器松耦合，并把每次 LLM 或工具调用独立调度，因而看不到跨轮的资源依赖。论文将由此产生的问题分为三类：工具执行期间的 KV cache thrashing、KV-a"
+    },
+    {
+      "slug": "tokencake",
+      "title": "TokenCake: A KV-Cache-centric Serving Framework for LLM-based Multi-Agent Applications",
+      "arxivId": "2510.18586v4",
+      "arxivUrl": "https://arxiv.org/abs/2510.18586",
+      "date": "2026-08-21",
+      "categories": [
+        "Agent 推理优化"
+      ],
+      "keywords": [
+        "tool 调用空闲 KV",
+        "动态内存分区",
+        "critical inversion",
+        "预测上传"
+      ],
+      "read": false,
+      "excerpt": "面向带外部 function call 的 LLM multi-agent application，TokenCake处理两类同时发生的 KV Cache 问题：agent 在工具调用期间保留其后续推理所需的 prefix，但这些空闲 KV blocks 继续占用 GPU；多个 agent 竞争有限 GPU cache 时，先到达的非关键 agent 可能驱逐 critical path 上 agent 的 cache，令后者重新 pr"
+    },
+    {
+      "slug": "topas",
+      "title": "TOPAS: Workflow-Aware Prefix-State Scheduling for Multi-Agent LLM Serving",
+      "arxivId": "2608.25523v1",
+      "arxivUrl": "https://arxiv.org/abs/2608.25523",
+      "date": "2026-08-26",
+      "categories": [
+        "Agent 推理优化"
+      ],
+      "keywords": [
+        "workflow-aware 调度",
+        "prefix-state",
+        "关键路径 JCT",
+        "KV 复用"
+      ],
+      "read": true,
+      "excerpt": "多 agent LLM workflow 的同一 agent 会在不同 task 中反复发出带有长 static system prompt 的请求；该 prompt 的 KV cache 驻留在 GPU 中可跳过重复 prefill，但会挤占 dynamic suffix、decode token 和并发 batch 的 KV 预算。仅按 Longest Prefix Match（LPM）处理 locality 会把服务停留在上游、延"
+    }
+  ]
+}

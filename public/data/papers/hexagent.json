@@ -1,0 +1,60 @@
+{
+  "slug": "hexagent",
+  "title": "HexAGenT: Efficient Agentic LLM Serving via Workflow- and Heterogeneity-Aware Scheduling",
+  "arxivId": "2605.16637v1",
+  "arxivUrl": "https://arxiv.org/abs/2605.16637",
+  "date": "2026-05-15",
+  "codeUrl": null,
+  "categories": [
+    "Agent 推理优化"
+  ],
+  "keywords": [
+    "workflow-aware 调度",
+    "异构 P-D 放置",
+    "online DAG",
+    "scaled-SLO"
+  ],
+  "read": false,
+  "sections": [
+    {
+      "slug": "task",
+      "title": "Task",
+      "markdown": "Agentic LLM 的一次用户请求会展开为包含 LLM call、tool call、分支和汇合的 workflow；用户等待的是整个 workflow 的完成时间。论文将 workflow 表示为在线揭示的 DAG：到达时仅有 source node 可见，父节点或工具完成后才揭示子节点，因此调度器只能依据当前 runnable frontier 决策。（论文 §1、§4.1）\n\n目标场景是 heterogeneous prefill-decode（P-D）分离集群。每个 call 需选择 prefill instance、decode instance 和两个本地队列中的优先级，并同时处理 KV transfer 延迟、decode KV-cache 容量和各 GPU 的服务时间差异。（论文 §2、§4.2）论文以 standalone workflow horizon 为基准，定义 Req95/Req99 为使 95%/99% workflow 满足 $C_w \\leq \\alpha H_w$ 的最小 SLO scale $\\alpha$，优化 workflow 级而非单 call 的尾延迟。（论文 §3、§5.1、§7.3）"
+    },
+    {
+      "slug": "insight",
+      "title": "Insight",
+      "markdown": "1. **调度粒度需要保留 workflow 连续性**：将 per-call FCFS 改为 workflow-level FCFS 后，六个 characterization case 的平均 Req95 和 Req99 分别降低 31.4% 和 23.3%；Qwen-BFCL 的 Req95/Req99 从 21.11/26.89 变为 9.64/11.67。（论文 §3、Table 1）\n2. **优先级与异构放置相互依赖**：同一 ready call 在不同 prefill/decode pair 上具有不同的 prefill、transfer、decode 完成时间。HexAGenT 在 workflow-FCFS 基础上再将六个 case 的平均 Req95/Req99 降低 26.9%/42.6%，其中 Qwen-Mixed 从 10.30/15.01 降至 3.48/3.94。（论文 §3、Table 1、§5.3）\n3. **在线 horizon 将局部决策连接到端到端目标**：调度器以已揭示子图的 standalone completion time $H_w(t)$ 作为当前 SLO target，并用 projected ratio 比较候选 call 对该 target 的风险；新节点揭示或获得真实服务时间后会更新 horizon。（论文 §5.1）"
+    },
+    {
+      "slug": "novelty",
+      "title": "Novelty",
+      "markdown": "**有新意：**\n\n- **Online-revealed workflow horizon**：将 agent workflow 的部分已知 DAG $G_w(t)$ 与随揭示过程更新的 $H_w(t)$ 放进 SLO 调度目标，调度时使用当前 horizon 而非预先已知的完整 workflow 时长。（论文 §4.1、§5.1）\n- **Projected-risk joint planning**：在 prefill 阶段同时枚举 prefill/decode instance，计算含队列、服务与 KV-transfer 的 projected completion，再以 projected ratio 排序和选 pair。（论文 §5.3）\n- **Decode-capacity-aware placement**：把预测输出长度导出的 KV demand 作为 decode placement 的可行性条件，并区分 prefill 时已锁定 decode instance 的 call 与可自由放置的 call。（论文 §5.4）\n- **异步 plan application**：planner 在后台计算；计划仅更新仍在等待的 call，已经开始 prefill 或 decode 的 call 以运行时状态为准。（论文 §4.3、§5.2）\n\n**有限：**\n\n- workflow-FCFS、LLF、attained-service、DAG scheduling、P-D disaggregation、roofline latency estimation 和 proxy-model length prediction 均来自已有调度或 serving 工作；本文将这些机制组合到在线 DAG 与异构 P-D 场景。（论文 §2、§5.3-§5.4）\n- 实现建立在 SGLang v0.5.9 的 P-D serving feature 之上，调度策略位于 gateway 和 worker path，而不修改 GPU kernel 或 hot decode loop。（论文 §6）"
+    },
+    {
+      "slug": "solution",
+      "title": "Solution",
+      "markdown": "### **在线 DAG 与 scaled-SLO horizon**\n\n对 workflow $w$，$G_w(t)$ 表示时刻 $t$ 已揭示的子图。$H_w(t)$ 是该子图在同一 P-D cluster 独占执行时的 completion time；完整 DAG 揭示后，$H_w$ 成为完整 workflow 的 standalone horizon。论文在新 call 被揭示时重算 $H_w(t)$，并可用实测服务时间替换估计值。（论文 §5.1）\n\n对 $\\tau \\in \\{0.95, 0.99\\}$，优化目标是寻找使至少 $\\tau$ 比例 workflow 满足 scaled SLO 的最小 $\\alpha$：\n\n$$\n\\min_{\\pi}\\ \\alpha\n\\quad \\text{s.t.}\\quad\n\\frac{1}{|W|}\\sum_{w\\in W}\\mathbf{1}[C_w^\\pi \\leq \\alpha H_w] \\geq \\tau.\n$$\n\n其中 $C_w^\\pi$ 是策略 $\\pi$ 下的端到端完成时间。该式用于评价；每次事件到来时并不直接求解全局优化。（论文 §5.1，Eq. 1）\n\n### **Projected ratio 与 event-driven loop**\n\n对 workflow 到达时间为 $a_w$ 的 ready call $c$，在阶段 $s\\in\\{\\mathrm{Prefill},\\mathrm{Decode}\\}$ 定义：\n\n$$\nR_s(c,t)=\\frac{(t-a_w)+\\Delta_s(c,t)}{H_w(t)}.\n$$\n\n$\\Delta_s(c,t)$ 是在候选放置上的预计完成时间：prefill 阶段计入排队、prefill 和 KV transfer；decode 阶段计入等待容量和 decode 执行。每轮在 waiting set 中选取最大 $R_s$ 的 call，写入 placement 与 rank，再更新模拟资源状态。（论文 §5.1-§5.2，Algorithm 1）\n\n触发事件包括 workflow arrival、prefill completion、transfer completion 和 decode completion；当前实现对 arrival、decode completion 揭示的新 prefill work，以及 transfer completion 进入 decode 的工作触发 planner。State Collector 收集两个阶段的 queue、running call、KV usage、transfer state 和 workflow progress，Estimator 使用 roofline-style model 估计时间与内存需求。（论文 §4.2-§4.3、§5.2）\n\n### **联合 prefill-decode placement**\n\n在 prefill 规划中，调度器为每个 call 枚举 prefill instance 和 decode instance，估计 prefill finish、KV-transfer latency 与最早 decode finish。小队列时，每选中一个最高风险 call，就将其分配给 projected decode finish 最早的 pair，并重算剩余 call 的 priority；大队列采用相同 risk score 的 one-pass ordering 以限制规划开销。（论文 §5.3）\n\n预先选择 decode instance 使 runtime 在 prefill 完成后知道 KV 应传往何处；pair 的选择也会纳入不同硬件组合的有效带宽。一个 call 开始 prefill 后，prefill/decode placement 固定，不再跨 instance 移动。（论文 §4.2-§4.3、§5.3）\n\n### **Decode KV 可行性与异步执行**\n\ndecode demand 使用输入 token 数和 proxy model 预测的输出 token 数近似：\n\n$$\nm(c)=L_{in}(c)+\\hat L_{out}(c),\\qquad m(c)\\leq Cap(d).\n$$\n\n只有满足容量条件的 decode instance $d$ 才可接收 call。prefill 阶段已经绑定 decode instance 的 call 仅能在该 instance 内重排；free call 则在所有可行 instance 中选择最早 projected finish 的位置。（论文 §5.4，Eq. 3-4）\n\n每个阶段最多有一个 in-flight plan。前台 serving 不等待 planner；若计划返回时 call 仍在等待则应用更新，若 call 已开始服务则忽略该阶段的迟到计划，并在 planner 在途时使用 fallback plan。（论文 §4.3、§5.2，Algorithm 1）"
+    },
+    {
+      "slug": "flaw",
+      "title": "Flaw",
+      "markdown": "- **时间估计没有与真实服务时间逐项校准**：Estimator 使用 roofline-style model 给出 prefill、decode 和 transfer 估计；鲁棒性实验只对 scheduler-visible prefill/decode estimate 注入 0%、10%、20%、30% 的确定性乘性误差，未报告真实 estimate 与实测 latency 的误差分布。（论文 §4.2、§7.6）\n- **输出长度预测缺少单独报告**：$\\hat L_{out}(c)$ 直接参与 $m(c)$ 和 decode capacity feasibility，但论文未给出 proxy model 的输出长度误差、预测失败率或去除该预测后的调度结果。（论文 §5.4、§7.1-§7.7）\n- **fallback 与队列切换阈值未具体化**：Algorithm 1 仅写为 planner in flight 时“Apply fallback plan if needed”；§5.3-§5.4 说明大队列切到 one-pass ordering，但未给出 queue-size 阈值、fallback 规则或相应的消融。（论文 §5.2-§5.4，Algorithm 1）\n- **负载扫描范围固定**：ShareGPT 为 100 workflows、10 workflows/s；BFCL-v3 为 400、40 workflows/s；LATS 为 100、40 workflows/s；Mixed 为 100、10 workflows/s。实验没有改变到达率、burst 形态或 workflow 数量。（论文 §7.1）\n- **集群和模型覆盖范围有限**：heterogeneous 配置仅为 Hetero-1（8P+8D）和 Hetero-2（10P+10D），均由 A100/H100/H200 组成；homogeneous 配置仅为 Llama H200 4P+4D 与 Qwen A100 4P+4D；模型为 Llama 3.1-70B 与 Qwen 3-235B-A22B。（论文 §7.1）\n- **性能指标集中于 scaled-SLO 与 planner overhead**：评估报告 Req95、Req99、SLO-attainment curve 和 scheduler time；文中未给出 GPU utilization、workflow throughput、单位 workflow 成本或 KV-cache fragmentation 指标。（论文 §7.3-§7.7）\n- **baseline 集合为三种实现**：比较对象为 workflow-level SGLang-FCFS、workflow-level SGLang-LLF 与 Autellix-ATLAS；Table 2 的“Best baseline”是对每条 trace 先选最佳 baseline 再做平均。（论文 §7.2、§7.4，Table 2）"
+    },
+    {
+      "slug": "thinking",
+      "title": "Thinking",
+      "markdown": "| 维度 | 评价 |\n| ---- | ---- |\n| 系统思维 | **强**：将 online DAG、P-D queue、KV transfer、decode capacity、GPU 异构服务时间和 workflow SLO 放在同一调度路径；架构由 Workflow Front-End、State Collector、Estimator、Joint Planner 和 Plan Dispatcher 组成。（论文 §4.1-§4.3） |\n| 实用主义 | **强**：实现复用 SGLang P-D serving；planner 不进入 GPU kernel/hot decode loop；late plan 不回滚已启动服务，并以 one-pass ordering 限制大队列规划开销。（论文 §5.3-§6） |\n| 控制论 / 反馈 | **弱**：运行时会更新 queue、KV usage、transfer state 和完成 telemetry，但 priority 的核心是当前估计的 projected ratio；论文未给出基于 estimate residual 或 SLO violation 的在线参数更新规则。（论文 §4.2、§5.1-§5.4、§6） |\n| 理论严谨性 | **弱**：给出 scaled-SLO objective、projected-ratio surrogate 与 greedy procedure，未给出 competitive ratio、近似界或最优解对照。（论文 §5.1-§5.4） |\n| 实验设计 | **中**：覆盖四类 trace、两类模型、两种异构和两种同构部署，并包含 estimation-error 与 scheduler-overhead 实验；各组件、预测精度、负载强度和成本指标未单独展开。（论文 §7.1-§7.7） |\n\n### 延伸方向\n\n1. **真实 tool latency 纳入 horizon**：当前 DAG 在 parent call 或 tool call 完成后揭示子节点，但调度模型的候选服务时间由 prefill、transfer 和 decode 构成。可将 tool 执行时间及其分布加入 workflow horizon 与 projected ratio。难点是工具调用受外部系统、缓存和重试影响，延迟不稳定。（论文 §4.1、§5.1）\n2. **估计器校准与预测消融**：对 prefill、decode、transfer 和输出长度分别记录预测值与实测值，并比较不同误差形态下的 Req95/Req99。可据此决定何时以观测服务时间替换估计，并检验 $\\hat L_{out}$ 对 capacity check 的影响。难点是 batch interaction 与硬件状态会使误差随队列状态变化。（论文 §4.2、§5.1、§5.4、§7.6）\n3. **多租户 SLO 与公平性**：当前目标按全部 workflow 的 SLO-attainment 比例聚合。可为 tenant 或 workflow class 维护独立 horizon、attainment target 或最低服务份额，并报告其与全局 Req95/Req99 的关系。难点是高风险 workflow 的优先级可能与服务份额约束冲突。（论文 §5.1、§7.3）\n4. **负载与部署空间扩展**：改变到达率、burst、P:D 比例、GPU 组合、上下文长度和 workflow 规模，记录 scheduler overhead 与 scaled-SLO 的变化。现有实验使用固定 trace 到达率及少量 cluster configuration。难点是 workload 的在线揭示结构与资源异构会共同扩大实验空间。（论文 §7.1、§7.7）\n5. **调度决策下沉到 continuous batching**：现有实现将策略放在 gateway 和 worker path，并保持在 GPU kernel/hot decode loop 之外。可研究 projected risk 与 decode batch admission 或 preemption 的结合。难点是需要同时保证 KV-capacity、batch efficiency 和运行时开销。（论文 §6）"
+    },
+    {
+      "slug": "核心数据",
+      "title": "核心数据",
+      "markdown": "- Characterization 中，Workflow-FCFS 相对 per-call FCFS 的平均 Req95/Req99 降幅为 **31.4% / 23.3%**；HexAGenT 相对 Workflow-FCFS 再降 **26.9% / 42.6%**。（论文 §3、Table 1）\n- Hetero-1 的平均结果：Llama 为 **3.54 / 3.71**，best baseline 为 4.00 / 4.75；Qwen 为 **4.48 / 4.69**，best baseline 为 5.60 / 7.22。（论文 §7.4，Table 2）\n- Qwen Hetero-1 Mixed：Req95/Req99 为 **3.48 / 3.94**，相对 Workflow-LLF 的 5.85 / 8.96 降低 **40.6% / 56.0%**。（论文 §7.4，Table 3）\n- Homogeneous 4P+4D：Llama H200 的 Req95/Req99 降幅为 **24.8% / 36.8%**；Qwen A100 为 **23.1% / 33.9%**。（论文 §7.5，Table 4）\n- Hetero-1 估计误差 30% 时，Llama 的 Req99 degradation 为 **1.5%**；Qwen 在 10% 误差时 Req99 degradation 为 **9.5%**。（论文 §7.6，Table 5）\n- 调度平均开销为 **7.1-14.7 ms/invocation**；跨 trace 的最大每次平均值为 **23.7 ms**。（论文 §7.7，Table 6）"
+    },
+    {
+      "slug": "架构速览",
+      "title": "架构速览",
+      "markdown": "Workflow Front-End\n      arrival / online DAG reveal\n              |\n              v\n    Global Scheduler\n      State Collector -> Estimator -> Joint Planner -> Plan Dispatcher\n              |              |             |                 |\n              |              |             |        placement + queue rank\n              v              v             v                 v\n    Prefill pool ---- KV transfer network ----> Decode pool\n      heterogeneous GPUs                       KV-capacity admission\n              |                                         |\n              +---- prefill/decode completion ----------+\n                               |\n                        reveal child calls; reschedule\n\nworkflow arrival、decode completion 触发的新 prefill work，以及 transfer completion 触发的 decode work 会进入调度；plan 异步应用于仍在等待的 call。（论文 §4.2-§4.3、§5.2）"
+    }
+  ]
+}

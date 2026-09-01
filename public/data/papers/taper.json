@@ -1,0 +1,60 @@
+{
+  "slug": "taper",
+  "title": "Regulating Branch Parallelism in LLM Serving",
+  "arxivId": "2605.06914",
+  "arxivUrl": "https://arxiv.org/abs/2605.06914",
+  "date": "2026-05-07",
+  "codeUrl": null,
+  "categories": [
+    "LLM 集群调度"
+  ],
+  "keywords": [
+    "分支并行",
+    "slack admission",
+    "SLO 保护",
+    "goodput"
+  ],
+  "read": true,
+  "sections": [
+    {
+      "slug": "task",
+      "title": "Task",
+      "markdown": "Intra-request parallelism（IRP）把同一请求拆成可独立生成的 branches，以缩短单请求的 autoregressive critical path；但在 continuous batching 中，每个 admitted branch 都会扩宽共享 decode step。并行阶段的请求从更宽的 step 获得多分支进展，处于 serial stage 的同 batch 请求却只得到一个 token，并同样承担更长的 step latency。论文将这部分未被补偿的额外等待定义为 **branch externality**，并将问题改写为：在每个 decode step，怎样在不破坏 serial request TPOT SLO 的条件下实现尽可能多的 branch width。（论文 §1、§2.3）\n\n该问题不能用 IRP-Off、eager admission 或固定 width cap 解决。安全 width 同时随活跃序列数、aggregate context length、各请求剩余 deadline slack 和 KV-cache 状态变化；固定策略只能适应部分负载区间。实验中的 mixed workload 令 50% 请求为 decomposable，平均 branch fanout（ABF）为 4.1、parallel token share（PTS）为 58%，代表并行与串行请求会长期共存的服务端场景。（论文 §2.1、§4.1、Appendix D）"
+    },
+    {
+      "slug": "insight",
+      "title": "Insight",
+      "markdown": "1. **IRP 的系统代价是跨请求外部性，而不是单请求吞吐问题**：将额外分支加入 decode step 会提高所有 active sequence 的 step latency，但只有 parallel-stage request 得到额外 token progress；raw throughput 因此可能上升，而 goodput 和 serial request 的 SLO attainment 下降。（论文 §2.2–§2.3）\n2. **branch-level scheduling 使 compute width 可逆，而 KV memory 不必随之回收**：siblings 共享 prefix KV，defer 一个 branch 时保留其小的 branch-local KV；下一 step 再 admission 无需 restore。若 KV 压力需要 eviction，系统仍按 parent request 进行原有的 request-level preemption。（论文 §1、§3.5、Appendix C.2）\n3. **最紧 deadline 应决定共同 batch 的 opportunistic budget**：TAPER 先保证每个 active request 在 baseline step 中前进一个 token，再把剩余 branch 作为 opportunistic work；budget 取所有请求 residual slack 的最小值，避免 slack 较多的 parallel request 让紧急 serial request 逾期。（论文 §3.3）"
+    },
+    {
+      "slug": "novelty",
+      "title": "Novelty",
+      "markdown": "**有新意：**\n\n- **branch externality 的 serving-layer 定义**：论文把 IRP 从“如何暴露单请求并行结构”转为“如何在共享 decode step 中 admission 已暴露的 branch”，以 $E_t(\\mathbf{k})$ 衡量相对 protected baseline 的增量 step latency。（论文 §2.3、§5）\n- **基于 schedule invariance 的 per-step width regulation**：在 branch isolation 与 canonical reduce order 成立时，branch 的调度时序不改变输出分布；这让 width 能逐 step 收缩或扩张而不改变语义。（论文 §3.1、Appendix A）\n- **slack-budgeted admission + utility/cost greedy planner**：将可用 slack 转成 latency budget，再以 marginal utility / marginal latency cost 选择额外 branch；safety 与 value 分离，utility 可表示 throughput、fairness 或 tenant priority。（论文 §3.3–§3.4）\n\n**有限：**\n\n- IRP 的 branch discovery、branch isolation 和 Map/Process/Reduce execution 由 Multiverse、ASPD、APAR、PASTA、SoT 等前端提供；TAPER 不产生或训练 branch structure，而是调节运行时 admission。（论文 §2.1、§5、Appendix F）\n- calibrated latency model、decode-slack budgeting 和 greedy knapsack-style allocation 都有已有 serving / scheduling 对应思路；论文的组合集中在 branch width、shared KV 和 per-request slack 的约束关系。（论文 §3.2–§3.4、Appendix B、Appendix F）"
+    },
+    {
+      "slug": "solution",
+      "title": "Solution",
+      "markdown": "### **Branch externality 与 protected baseline**\n\n对 decode step $t$，令 $S_0$ 表示 protected composition：每个 active request 恰好推进一个 token；serial stage 贡献一个 continuation，parallel stage 也只选一个 branch。若 $κ_r$ 是为 request $r$ 额外 admission 的 branch 数，widened composition 为 $S(\\mathbf{k})$，则额外 branch 对整个 batch 的预测 latency 代价为：\n\n$$\nE_t(\\mathbf{k}) = T\\!\\left(S(\\mathbf{k})\\right)-T(S_0).\n$$\n\n$T(\\cdot)$ 是 decode-step latency predictor。这个差值由同 batch 的每个请求支付，但只有 $κ_r>0$ 的 parallel request 获得额外 branch progress；因此 TAPER 以 $S_0$ 作为不可侵占的 service guarantee，而不是直接从 eager width 削减。（论文 §2.3、§3.2–§3.3）\n\n论文用 batch size 与 aggregate context length 预测 latency：\n\n$$\nT(S)=a+b\\cdot n_{\\mathrm{tokens}}+c\\cdot L_{\\mathrm{context}},\n$$\n\n其中 $a$ 为固定开销，$b$ 对应每个新 token 的 FFN 主导成本，$c$ 对应 aggregate context length 的 attention 主导成本。额外 branch 同时增加 $n_{\\mathrm{tokens}}$ 和 $L_{\\mathrm{context}}$，故在 $b,c>0$ 时 predictor 单调；这也是后续 greedy pruning 的条件。（论文 §3.2、Appendix C.1）\n\n### **Schedule invariance 与 branch-level KV accounting**\n\n一个 parallel phase 写作 $\\phi=(P_\\phi,H_\\phi,\\{h_i\\}_{i=1}^{n_\\phi})$。branch $i$ 的第 $t$ 个 token 只能 attend shared prefix、phase header、该 branch header 和自身历史：\n\n$$\ny_{i,t}\\mid P_\\phi\\oplus H_\\phi\\oplus h_i\\oplus y_{i,<t}.\n$$\n\nreduce phase 在所有 branch 完成后，按 canonical order 拼接各 branch 输出。由 branch 之间不可见、reduce 输入顺序不依赖完成时序，任意 valid schedule 都给出相同条件分布；deterministic decoding 下输出相同，stochastic decoding 下固定 per-branch random seed 后也相同。（论文 §3.1、Appendix A）\n\n这个语义条件让 scheduler 可以不运行某个 ready branch，却不会引入重算或 prefix restore。prefix KV 由 siblings 共享，额外 branch 的边际内存为其已生成 token 所在的 blocks：\n\n$$\n\\Delta M(j)=\\operatorname{blocks}\\!\\left(L_j^{\\mathrm{branch-local}}\\right).\n$$\n\n尚未生成 token 的 branch 有 $\\Delta M(j)=0$；运行时仍追踪总 KV occupancy，必要时将整个 parent request 交给原有 preemption 机制。（论文 §3.1、§3.5、Appendix C.2）\n\n### **Slack-budgeted admission 与 per-step planner**\n\n令 baseline 预测耗时为 $T_0=T(S_0)$，$d_r(t)$ 是 request $r$ 的 next-token deadline。TAPER 把最紧 request 的剩余 deadline 减去 baseline cost，得到可花费的 batch slack：\n\n$$\nB_t=\\max\\!\\left(0,\\min_r(d_r(t)-t)-T_0\\right).\n$$\n\noperator 选择 slack fraction $\\rho\\in(0,1]$；候选 widened step 只有在\n\n$$\nT(S)\\le T_0+\\rho B_t\n$$\n\n时才可 admission。该不等式把 branch externality 约束为 $ρ$ 倍的剩余 slack，且最小值运算使所有 branch 都受最紧 deadline 保护。（论文 §3.3）\n\n在可行候选中，planner 反复挑选边际分数最大的 request：\n\n$$\n\\frac{u_r(k+1)-u_r(k)}{\\varepsilon+\\max(0,\\,T(S')-T(S))}.\n$$\n\n若增加一个 branch 已超预算，单调性表明该 request 的后续 branch 也不可行，可直接 prune。最优 width allocation 可归约为 0-1 knapsack；论文因此每个 decode step 重新 greedy planning，而非提交一个 phase-level 最优计划。（论文 §3.4、Appendix B）"
+    },
+    {
+      "slug": "flaw",
+      "title": "Flaw",
+      "markdown": "- **适用语义受 branch isolation 限制**：Lemma 3.1 要求 sibling token 不进入彼此 attention context，且 reduce 按 canonical order 而不是 completion order 组合。Hogwild! Inference 的共享并发 KV 以及任何 cross-branch attention 前端不满足这些条件，TAPER 的 output-invariance 结论不能直接使用。（论文 §3.1、Appendix A、Appendix F）\n- **latency predictor 的跨环境参数没有公开量化**：$a,b,c$ 控制 fixed overhead、per-token FFN cost 和 context-length attention cost；论文以 500 个 profiling steps 覆盖 batch size 1–512、context 128–8192 进行 OLS，并每 10 分钟用最近 200 个 step refresh，但未给出三个系数或在不同 GPU、TP 配置、context 超出 8,192 时的误差。当前 1.8% MAPE 只覆盖 8×A100-80GB、Qwen3-32B 的 profile grid。（论文 Appendix C.1、Appendix D）\n- **$\\rho$ 的选择只覆盖有限 sweep**：$\\rho$ 决定 batch 剩余 slack 中可用于 opportunistic width 的比例；默认值为 0.8，实验比较 0.5（1.25× goodput、99.5% attainment）、0.8（1.77×、99%）和 1.0（1.45×、91%）。该设置没有给出按 workload 或 tenant SLO 自动选择 $\\rho$ 的机制，面对 burstiness 和 predictor error 时仍由固定 operating point 决定。（论文 §4.1、§4.3）\n- **utility interface 未做 fairness / priority 验证**：planner 声称可用 concave utility 或 priority-weighted utility，但所有主实验使用线性 $u_r(k)=k$。该参数决定一个 request 获得第 $k+1$ 个 branch 的价值，未报告多租户、异质 SLO 或 fairness utility 的 admission 分配与 tail latency。（论文 §3.3、Appendix D）\n- **memory 与 deployment scope 有边界**：高负载时峰值 GPU memory utilization 为约 78%，其中 KV cache 约占总显存 62%，余量用于 deferred branch 的 branch-local KV；论文没有展示接近 OOM、请求级 eviction 频繁触发时的 width regulation。实现仅在单节点 8×A100-80GB、TP=8 上测量，未覆盖 multi-node dispatch、KV transfer 或跨节点 deadline coordination。（论文 Appendix C.2、Appendix D、§6）"
+    },
+    {
+      "slug": "thinking",
+      "title": "Thinking",
+      "markdown": "| 维度 | 评价 |\n| ---- | ---- |\n| 系统思维 | **强**：将 single-request branch speedup、continuous batching、KV sharing 和 serial request TPOT 统一成 shared decode-step 的 admission 问题。（论文 §1–§3） |\n| 控制论 | **强**：每个 step 重新估计 slack、以预测 latency 作前馈约束，并在下一 step 以实际 latency 更新状态；控制量是可逆的 branch width。（论文 §3.3–§3.5） |\n| 理论严谨性 | **强**：明确给出 schedule invariance 的 visibility / ordering 前提，并把 global width allocation 的 NP-hardness 归约到 0-1 knapsack。（论文 §3.1、Appendix A–B） |\n| 工程可部署性 | **中**：planner 中位开销为 0.31 ms、P99 为 0.81 ms，实验使用已有 SGLang radix-tree KV allocation；但 predictor 需离线 profiling 和定期 refresh。（论文 §4.3、Appendix C–E） |\n| 泛化性 | **中**：补充了 Qwen2.5-72B 与 SPRINT frontend，均沿用 $\\rho=0.8$ 和 linear utility；跨节点及 branch-dependent semantics 未覆盖。（论文 Appendix E、§6） |\n\n### 延伸方向\n\n1. **在线鲁棒 predictor 与 $\\rho$ 控制**：将 predictor residual、deadline miss rate 和 workload regime 用于同时更新 $(a,b,c)$ 与 $\\rho$。当前 10 分钟 / 200-step refresh 面对 sharp transition 可能滞后；关键问题是区分硬件干扰、context 分布变化和 branch fanout 变化，并保持 safety margin。（论文 Appendix C.1、§4.2）\n2. **多租户 utility 与 fairness policy**：把线性 $u_r(k)=k$ 替换为 tenant-weighted 或 concave utility，测量 serial 与 parallel tenant 的 SLO attainment、goodput 和 tail TPOT。关键挑战是 min-slack safety rule 可能被单一紧 deadline 长期绑定，必须定义共享 slack 的公平分配。（论文 §3.3）\n3. **multi-node / disaggregated serving**：将 width planner 与 cluster routing、prefill-decode disaggregation、KV transfer 编排。关键挑战是 branch defer 不再只是本地 compute 调节：跨节点 KV location、transfer queue 和 route decision 都会改变预测 latency。（论文 §6、Appendix F）\n4. **扩展至非独立 branch 语义**：为有限的 sibling visibility、completion-order reduce 或共享 reasoning state 建立可验证的 schedule contract。关键挑战是延迟 branch 可能改变 token distribution，不能直接继承 Lemma 3.1 的 output-invariance。（论文 Appendix A、Appendix F）\n5. **与 speculative decoding 的联合调节**：TAPER 决定 semantic branch width，TurboSpec / AdaSpec 类机制决定 branch 内 draft length。关键挑战是 branch width 的 externality 与 draft rejection 的私有 compute cost 需要由同一 latency / memory budget 协调。（论文 Appendix F）"
+    },
+    {
+      "slug": "核心数据",
+      "title": "核心数据",
+      "markdown": "- 10 小时、PDR=50% 的主实验：TAPER 相对 IRP-Off 的 goodput 为 **1.77×**、SLO attainment 为 **99%**；IRP-Eager 为 **1.20×**、**48%**。（论文 §4.2、Appendix E.1）\n- 高负载（均值 1.27 req/s，峰值 1.54 req/s）：IRP-Eager 平均 step latency **148 ms**、SLO attainment **41%**；TAPER 平均 **48 ms**、branch admission 约 **35%**、attainment **99%**。（论文 §4.2、Appendix D）\n- 消融：去掉 slack budget 后 goodput **0.92×**、attainment **48%**；不 per-step replanning 为 **1.18× / 82%**；使用 constant predictor 为 **1.12× / 96%**。（论文 §4.3）\n- Qwen2.5-72B（100 ms SLO）：TAPER **1.72× / 97%**，IRP-Eager **1.25× / 62%**。（论文 Appendix E.5）\n- SPRINT frontend（50 ms SLO）：TAPER **1.45× / 98%**，IRP-Eager **1.18× / 68%**。（论文 Appendix E.6）\n- planner 开销：中位数 **0.31 ms**、P99 **0.81 ms**、最大值 **1.24 ms**。（论文 Appendix E.4）"
+    },
+    {
+      "slug": "架构速览",
+      "title": "架构速览",
+      "markdown": "```text\nIRP frontend (Multiverse / SPRINT)\n        │ exposes serial / parallel phases and ready branches\n        ▼\n┌─────────────────────────────────────────────────────────────┐\n│ SGLang continuous batch                                      │\n│  protected baseline S₀: every active request gets 1 token    │\n│  residual slack Bₜ: min request deadline - T(S₀)             │\n└──────────────┬──────────────────────────────────────────────┘\n               │\n               ▼\n┌─────────────────────────────────────────────────────────────┐\n│ TAPER per-step planner                                       │\n│  predictor T(S)=a+b·n_tokens+c·L_context                    │\n│  admit extras only if T(S) ≤ T₀ + ρBₜ                       │\n│  choose max Δutility / Δlatency; prune infeasible branches  │\n└──────────────┬──────────────────────────────────────────────┘\n               │              │\n        admitted branches     └─ deferred branch-local KV remains resident\n               │\n               ▼\n    shared prefix KV (radix tree) → decode step → canonical reduce\n```\n\n**代码**：论文正文未提供公开代码仓库链接；检索未发现与该论文对应的公开 GitHub repository。"
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "slug": "mpcache",
+  "title": "MPCache: MPC-Friendly KV Cache Eviction for Efficient Private LLM Inference",
+  "arxivId": "2501.06807",
+  "arxivUrl": "https://arxiv.org/abs/2501.06807",
+  "date": "2025-01",
+  "codeUrl": null,
+  "categories": [
+    "KV Cache 压缩与驱逐"
+  ],
+  "keywords": [
+    "MPC 隐私推理",
+    "token 重要性三分",
+    "聚类选择"
+  ],
+  "read": false,
+  "sections": [
+    {
+      "slug": "task",
+      "title": "Task",
+      "markdown": "基于 MPC 的隐私 LLM 推理中，attention 计算（尤其 Softmax）在长序列下主导了延迟和通信开销。现有的 KV cache eviction 方法（H2O、StreamingLLM、LongCache 等）为明文推理设计，直接移植到 MPC 后反而引入更多开销——top-k 排序、token gathering、余弦相似度等操作在密文域代价极高。问题的核心矛盾是：**KV cache eviction 减少了 attention 计算量，但 selection 本身的 MPC 协议开销可能超过节省的计算量**。MPCache 试图回答：如何设计一个同时兼顾模型性能和 MPC 效率的 training-free KV cache 驱逐框架？"
+    },
+    {
+      "slug": "insight",
+      "title": "Insight",
+      "markdown": "1. **Token 重要性三分法**：attention map 中的 token 可分为\"对所有后续 token 都重要\"(IA)、\"对所有后续 token 都不重要\"(UIA)、\"仅对部分 token 重要\"(IC) 三类。~60% 的 token 属于 UIA，可在 prefill 阶段一次性静态丢弃，剩余 IC token 再做动态选择。这个分层策略把昂贵的 per-step 动态选择的输入规模大幅缩小。\n2. **用聚类将 token-wise 选择降维为 cluster-wise 选择**：相邻 token 的 KV cache 具有 locality，可聚合成 cluster。相似度计算从 O(T) 次降到 O(C) 次（C << T），且 token gathering 的 one-hot 向量宽度和比较次数同步缩减（实测 73.5x / 369.8x 的延迟/通信改善）。\n3. **相邻层共享 top-k 索引**：残差连接使相邻层的 top-k 排序高度重叠（commonality score 可达 0.8+）。每隔一层才计算一次索引，其余层复用，直接砍掉近一半的动态选择开销。"
+    },
+    {
+      "slug": "novelty",
+      "title": "Novelty",
+      "markdown": "**有新意：**\n- 将 MPC-friendly 设计贯穿整个 KV cache eviction 流程，不是简单移植而是从协议复杂度出发重新设计每个环节。把 max dot product 上界线性化为 α·r_max + (1-α)·r_min，消除 MPC 中昂贵的 max 比较操作，再通过 reordering 将乘法量减半——这是针对 MPC 特有的优化思路。\n- 层级聚类（hierarchical clustering）与 coarse-to-fine 选择的结合，类似于 hierarchical RL 中的分层决策，在 KV cache eviction 文献中未见先例。\n- 跨层索引共享策略虽简单，但基于对 commonality score 的系统验证，有数据支撑。\n\n**有限：**\n- 静态 eviction + 动态选择的混合范式本身不新，SnapKV（静态）+ InfLLM/Quest（动态）的组合已有先例。MPCache 的贡献更多在于使该范式在 MPC 下可行。\n- 相似度近似的 upper bound 方法（bounding volume）借鉴了 [36] 的工作，非完全原创。\n- α=0.6 是经验选择，缺乏理论最优性保证（附录 G 的分析偏启发式）。"
+    },
+    {
+      "slug": "flaw",
+      "title": "Flaw",
+      "markdown": "- **α 参数敏感性未充分讨论**：α 控制 r_max 和 r_min 的加权混合比例（论文固定为 0.6），直接影响 cluster 重要性排序的准确性。附录 F.3 仅在 TriviaQA 和 HotpotQA 上做了 sweep（Figure 18），显示不同数据集偏好不同 α 值，但论文未给出自适应选择策略或 sensitivity bound。在分布外场景下 α=0.6 的鲁棒性存疑。\n- **静态 eviction 比例的选择缺乏自动化**：论文在 HotpotQA 上展示了 eviction ratio 从 0%→75% 的性能变化（F1: 31.16→28.89），最终选 70%。但不同数据集（如 XSUM 用不同配置）、不同模型规模需要不同的 eviction ratio，论文将其交给用户根据\"预期序列长度和可容忍延迟\"来确定，缺乏自动确定机制。\n- **层级聚类配置（cluster size、各层选择比例）手动调参**：Table 6 展示了 s=32/64 与不同 coarse-grained 比例的组合，性能从 29.0% 到 30.2% 不等，通信从 69MB 到 163MB 不等，但最优配置随任务变化，论文未提供选择准则。\n- **实验模型规模受限**：主要在 7B 模型上验证，13B 仅在 XSUM 上做了对比（Table 4），LLaMA-3.1-8B 仅做了 LongBench（Table 5）。更大模型（13B/70B）上的 scaling behavior 未验证。MPC 效率评估甚至将 embedding dimension 缩减到 1024（非原始 4096），声称是硬件限制，但这可能低估了通信开销的真实占比。\n- **跨层索引共享的性能代价不透明**：仅在 HotpotQA 上报告了\"层数增加→延迟降低但性能下降\"的趋势（Figure 12），缺乏定量的 performance-latency Pareto front 分析。默认选择 2 层共享是经验性的。\n- **缺少与 learning-based 方法的直接对比**：DuoAttention 和 SeerAttention 在 Table 5 中出现但论文未讨论其 training cost 的 amortization 问题，且仅在 LLaMA-3.1 上比较。与 Quest 等同期工作在某些任务上 MPCache 优势不大（如 QMSum 24.83 vs Quest 24.91）。"
+    },
+    {
+      "slug": "thinking",
+      "title": "Thinking",
+      "markdown": "| 维度 | 评价 |\n|------|------|\n| 系统思维 | **强**：从 MPC 协议开销分解（Figure 1b/c）出发定位瓶颈，每个设计决策都有 protocol complexity analysis 对应，不是\"先设计再分析\"而是\"从约束出发设计\"。 |\n| 控制论 | **弱**：α、eviction ratio、cluster size、跨层共享层数等超参缺乏自适应机制，依赖离线调参。论文本身承认 eviction ratio 需要根据场景确定，但未提供在线自适应方案。 |\n| 实用主义 | **强**：training-free 是明确的实用选择；静态 eviction 在 prefill 只做一次、动态选择通过聚类大幅降低频率——都是工程上可落地的设计。代码已开源。 |\n| 理论严谨性 | **中**：附录 G 给出了近似误差的理论分析，但核心的 α 参数选择仍靠经验。upper bound 近似（Equation 2）的 tightness 未量化。 |\n\n**思维局限**：过度聚焦于\"减少 MPC 协议开销\"这一单一目标，对\"被静态驱逐的 UIA token 在下游是否真不重要\"缺乏鲁棒性分析（论文自己在 Limitation 中也提到了这一点）。Needle-in-a-Haystack 测试仅作为补充，未深入分析 failure case。\n\n### 延伸方向\n\n1. **自适应 eviction ratio / α 选择**：根据 attention map 的动态稀疏度在线调整 eviction ratio 和 α，而非固定超参。可参考 reinforcement learning 或 bandit 方法做在线调度。挑战在于自适应决策本身在 MPC 下也有通信开销，需要将调度逻辑设计得足够轻量。\n2. **更大模型与更长序列的 scaling 验证**：在 13B/70B 和 32K+ 序列上验证 MPCache。更大模型可能有不同的 attention sparsity pattern，聚类效果和跨层 commonality 可能变化。挑战是 MPC 推理在大模型上的资源需求极高。\n3. **与 MPC 协议层的协同设计**：MPCache 在应用层优化，若与底层协议（如定制化的 secret sharing scheme for clustering）联合设计，可能进一步压缩通信。挑战是需要密码学和系统双重背景。\n4. **多租户 / 公平性场景**：当多个 client 并发请求时，不同 client 的 eviction 决策是否公平？长序列 client 是否会占用更多 server 资源？MPCache 未讨论此场景。\n5. **与 speculative decoding 的结合**：speculative decoding 需要快速验证多个 candidate token，KV cache eviction 可以降低验证成本。但动态选择的延迟可能抵消 speculative decoding 带来的加速，需要仔细分析 trade-off。"
+    },
+    {
+      "slug": "核心数据",
+      "title": "核心数据",
+      "markdown": "- **延迟**：vs full KV cache，**1.59~2.01x** 降低（seq len 512-2048，3PC）\n- **通信**：vs full KV cache，**3.39~8.37x** 降低\n- **vs LongCache**：**3.85x** 延迟、**19.47x** 通信降低\n- **性能保持**：HotpotQA 5% cache budget，MPCache F1=**30.27** vs InfLLM 28.20 vs LongCache 24.31（full cache 31.16）\n- **XSUM**：5% budget，7B 模型 MPCache ROUGE=**10.08** vs H2O 4.886（full 11.90）\n- **LLaMA-3.1-8B**：budget 1024，MPCache 在 NarrativeQA 达 **29.47** vs Quest 15.45 vs SnapKV 26.51\n- **Ablation**：静态 eviction 贡献 1.42x 延迟 / 2.76x 通信降低；完整 MPCache 达 **1.9x / 5.9x**"
+    },
+    {
+      "slug": "架构速览",
+      "title": "架构速览",
+      "markdown": "```\n┌─────────────────────────────────────────────────────┐\n│                    MPCache Framework                 │\n│                                                     │\n│  ┌───────────────┐    ┌──────────────────────────┐  │\n│  │  Prefill Stage │    │    Decoding Stage         │  │\n│  │                │    │                           │  │\n│  │  Step 1:       │    │  Step 2:                  │  │\n│  │  Static Evict  │───▶│  Dynamic Selection        │  │\n│  │  (UIA tokens)  │    │  (IC tokens)              │  │\n│  │                │    │                           │  │\n│  │  • Attn score  │    │  • Cluster-level Sim      │  │\n│  │    accumulation│    │    (α·r_max + (1-α)·r_min)│  │\n│  │  • Top-k once  │    │  • Hierarchical coarse→   │  │\n│  │                │    │    fine selection          │  │\n│  └───────────────┘    │  • Cross-layer index       │  │\n│                        │    sharing (every 2 layers)│  │\n│                        └──────────────────────────┘  │\n│                                                     │\n│  Result: IA tokens (always kept)                    │\n│        + selected IC tokens → Sparse Attention      │\n└─────────────────────────────────────────────────────┘\n```\n\n**GitHub**: https://github.com (论文标注了代码链接，具体 repo 需查看论文原文)"
+    }
+  ]
+}

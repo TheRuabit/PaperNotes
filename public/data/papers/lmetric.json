@@ -1,0 +1,59 @@
+{
+  "slug": "lmetric",
+  "title": "Simple is Better: Multiplication May Be All You Need for LLM Request Scheduling",
+  "arxivId": "2603.15202",
+  "arxivUrl": "https://arxiv.org/abs/2603.15202",
+  "date": "2026-03-16",
+  "codeUrl": null,
+  "categories": [
+    "LLM 集群调度"
+  ],
+  "keywords": [
+    "乘法调度",
+    "P-token",
+    "免超参"
+  ],
+  "read": false,
+  "sections": [
+    {
+      "slug": "task",
+      "title": "Task",
+      "markdown": "LLM 集群调度需要同时满足两个目标：(1) KV cache 感知——将请求路由到已有匹配 prefix 缓存的 instance 以减少 prefill 计算量；(2) 负载均衡——避免个别 instance 过载。现有方案（线性组合、filter-based、simulation-based）要么需要大量 workload-specific 的超参调优，要么依赖 per-model/per-hardware 的 simulator，工程复杂度高且性能仍不最优。这个问题在当前 agent 工作负载（高频 token 消耗、长 prefix 共享）兴起的背景下尤为紧迫。论文首次系统化地将 LLM 集群调度的组合策略分为三类并逐一分析其缺陷，定位清晰。"
+    },
+    {
+      "slug": "insight",
+      "title": "Insight",
+      "markdown": "1. **乘法替代加法，超参自动消除**：线性组合 `λ·A + (1-λ)·B` 中的 λ 在比较两个 instance 的分数大小时会被约掉（`min(A₁·B₁, A₂·B₂)` 等价于某种 λ 下的线性组合排序），因此无需调参。这是全文最核心的洞察，数学上简洁且有实际工程价值。\n2. **P-token 优于 KV hit ratio 作为 KV-aware 指标**：P-token（路由到某 instance 后的新 prefill token 数）隐含了对排队中 prefill 请求的感知，而 KV hit ratio 只看缓存命中率，忽略了该 instance 已有的 prefill 负载。实测 P50 TTFT 降低 14.4%，P95 TTFT 降低 42.8%。\n3. **BS 优于 total tokens 作为负载均衡指标**：decode 时间在 batch size 维度上更稳定（大 batch 必然慢），而 total tokens 在小 batch 下因 KV cache 存在反而不一定更慢。将 prefill 负载已由 P-token 承担后，BS 只需捕获 decode 负载。"
+    },
+    {
+      "slug": "novelty",
+      "title": "Novelty",
+      "markdown": "**有新意：**\n- 首次提出 multiplicative combinator 用于 LLM 调度，将一个工程调参问题转化为一个数学等价问题\n- 首次系统化地将现有 LLM 调度策略归类为 linear/filter/simulation 三种组合范式并做 apples-to-apples 对比\n- 对乘法失败条件的数学推导（Equation 2: x/x̄ ≤ |M|/|M̄|）以及基于此的两阶段 hotspot detector，从理论到工程闭环\n- 分析框架（Rust indicator factory + 统一编程模型）本身有独立工具价值，开源可用\n\n**有限：**\n- 乘法组合本身是经典数学技巧的直接移植，核心 insight 是\"发现它在 LLM 调度场景下成立\"而非发明新方法\n- P-token 和 BS 作为指标已被 Dynamo、Bailian 等系统使用过，本文的贡献更多在于指标选择的系统化论证和组合方式\n- 分析框架的 Rust 重实现主要是工程优化（消除 Python 性能 bug），方法论层面的贡献有限"
+    },
+    {
+      "slug": "flaw",
+      "title": "Flaw",
+      "markdown": "- **规模局限：仅 16 GPU / 16 instance**。生产集群通常数百 GPU，instance 间 KV cache 分布更稀疏，Equation 2 的边界条件可能更容易被触发。虽然 §6.3 有数百 GPU 的 canary release，但只报告了聚合指标，没有 hotspot detector 的触发率和误判率数据。\n- **模型单一：几乎全部实验只用 Qwen 系列（Qwen2-7B、Qwen3-30B、Qwen3.5-27B）**。不同模型架构（如 Llama、GPT 系列的 dense model，或更大 MoE）的 KV cache 访问模式可能不同，P-token vs KV hit ratio 的优劣关系未必一致。\n- **Trace scaling 假设粗糙**：将到达率缩放到 testbed 最大负载的一半，假设这\"近似 Bailian 的生产配置\"。但不同 workload 的 burstiness 在缩放后可能改变，KV cache 的时间局部性也会受影响。\n- **KV hotspot detector 的两阶段设计缺少参数敏感性分析**：第一阶段的监控粒度（\"highest KV hit rates\" 的定义）、第二阶段的 `2|M|` 连续请求阈值——这些参数的选择没有给出 justification。`2|M|` 为何不是 `|M|` 或 `3|M|`？\n- **LLM-as-simulator 的对比缺失**：近期有工作探索用 LLM 自身预测调度延迟，本文未将此纳入 baseline。\n- **TPOT 改善的因果链不够严谨**：论文声称 KV cache hit 提升也降低了 TPOT（因为减少了 prefill 计算，给 decode 腾出 GPU 时间），但没有做控制实验验证这一因果关系——可能是 TPOT 降低来自负载均衡改善而非 KV cache 间接效应。\n- **PolyServe 对比不公平**：PolyServe 的设计目标是 SLO-aware + 促进 auto-scaling（故意制造负载梯度），用 per-request latency 作为对比指标天然对其不利。论文虽然提到了这一点，但仍将其放入\"LMetric outperforms all baselines\"的结论中。"
+    },
+    {
+      "slug": "thinking",
+      "title": "Thinking",
+      "markdown": "| 维度 | 评价 |\n|------|------|\n| 系统思维 | **强**。将调度问题分解为 indicator × combinator 两层，先系统分类现有 combinator（linear/filter/simulation）再提出新 combinator，分析框架设计体现了清晰的抽象层次。 |\n| 实用主义 | **强**。核心方法只有一行乘法，工程实现极简；对失败 case 的处理也是先检测再 fallback，不追求完美而是追求\"够用且可检测\"。已在 Bailian 生产部署验证。 |\n| 理论严谨性 | **中**。Equation 1-2 的推导基于 worst-case 假设（所有 class-c 请求都路由到 M），给出了必要条件但承认非充分；两阶段 detector 是对此的 pragmatic 修补。推导过程清晰但简化假设（如稳态 batch size）的适用范围未讨论。 |\n| 实验设计 | **中**。覆盖 4 个 workload × 2 个模型 × 多个 request rate，baseline 选择全面（vLLM、Dynamo、llm-d、Preble、PolyServe、Bailian）。但模型多样性不足，且所有实验在单一硬件（H20）上完成。 |\n| 诚实性 | **强**。主动报告了乘法失败的 adversarial case（Figure 21），承认 ToolAgent trace 上 TTFT 略逊于 llm-d，讨论了 PolyServe 的不同设计目标。 |\n\n### 延伸方向\n\n1. **自适应 combinator**：乘法在极端 KV skew 下失败，线性组合需要调参——能否设计一个根据实时 workload 特征自动在两者间切换的策略？Equation 2 的 ratio 已经可以实时计算，关键挑战是如何在切换时避免 oscillation。\n2. **大规模集群验证**：在数百甚至上千 instance 的集群上验证乘法组合的有效性，特别是 KV cache 分布更稀疏时 Equation 2 被触发的频率。挑战在于大规模 trace 的获取和复现。\n3. **跨模型/跨架构泛化**：在 Llama、DeepSeek、GPT 系列上验证 P-token × BS 的有效性。MoE 模型的 expert 并行可能引入新的负载维度，dense model 的 KV cache 行为可能不同。\n4. **PD-disaggregation 下的乘法组合**：§7 讨论了 PD 分离架构下问题\"更简单\"，但未给出实验验证。将 P-token 用于 prefill instance 选择是否同样有效？挑战在于 prefill/decode cluster 的 capacity 匹配。\n5. **与 instance 内调度的协同**：全局调度（LMetric）和局部调度（chunked prefill、FairBatching）的联合优化。全局调度降低了 overload 概率，但局部调度在 overload 发生时的行为是否与全局策略一致？\n6. **KV hotspot 的预测与预防**：当前方案是 reactive 检测 + fallback。能否通过 workload profiling 预测潜在 hotspot，在请求到达前调整 KV cache 分布（如 proactive cache replication）？"
+    },
+    {
+      "slug": "核心数据",
+      "title": "核心数据",
+      "markdown": "- vs vLLM: ChatBot 上 mean TTFT 降低 **92%**，mean TPOT 降低 **24%**\n- vs Bailian 生产调度器: mean TTFT 降低 **39%**，mean TPOT 降低 **51%**（canary release, 数百 GPU）\n- vs llm-d (simulation-based): ChatBot 上 P99 TPOT 降低 **13%**\n- vs Preble: mean TTFT 降低 **56%**，mean TPOT 降低 **8%**\n- P-token vs KV hit ratio: P50 TTFT 降低 **14.4%**，P95 TTFT 降低 **42.8%**\n- KV hotspot 在所有评估 trace 中均未自然出现；生产环境中仅发现 1 例（thinking workload 的 burst）"
+    },
+    {
+      "slug": "架构速览",
+      "title": "架构速览",
+      "markdown": "```\n                    ┌─────────────────────────┐\n                    │     Global Scheduler     │\n                    │   (LMetric Router, Rust) │\n                    └────────┬────────────────┘\n                             │ score = min(P-token × BS)\n              ┌──────────────┼──────────────┐\n              ▼              ▼              ▼\n        ┌──────────┐  ┌──────────┐  ┌──────────┐\n        │Instance 0│  │Instance 1│  │Instance N│\n        │  vLLM    │  │  vLLM    │  │  vLLM    │\n        │ ┌──────┐ │  │ ┌──────┐ │  │ ┌──────┐ │\n        │ │Queue │ │  │ │Queue │ │  │ │Queue │ │\n        │ │P + D │ │  │ │P + D │ │  │ │P + D │ │\n        │ └──┬───┘ │  │ └──┬───┘ │  │ └──┬───┘ │\n        │    ▼     │  │    ▼     │  │    ▼     │\n        │ [GPU(s)] │  │ [GPU(s)] │  │ [GPU(s)] │\n        │ KV Cache │  │ KV Cache │  │ KV Cache │\n        └──────────┘  └──────────┘  └──────────┘\n\nIndicators (piggybacked on instance responses):\n  • P-token = new prefill tokens (considering KV cache hit)\n  • BS = queued + running batch size\n\nFailure detector: monitor x/x̄ vs |M|/|M̄| per request class\n  → if x/x̄ > |M̄|/|M̄| (hotspot), fallback to load-balancing-only\n```"
+    },
+    {
+      "slug": "开源资源",
+      "title": "开源资源",
+      "markdown": "- **代码**: https://github.com/blitz-serving/blitz-router\n- **Trace**: https://github.com/alibaba-edu/qwen-bailian-usagetraces-anon"
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "slug": "thunderagent",
+  "title": "ThunderAgent: A Simple, Fast and Program-Aware Agentic Inference System",
+  "arxivId": "2602.13692v2",
+  "arxivUrl": "https://arxiv.org/abs/2602.13692",
+  "date": "2026-03-10",
+  "codeUrl": "https://github.com/ThunderAgent-org/ThunderAgent",
+  "categories": [
+    "Agent 推理优化"
+  ],
+  "keywords": [
+    "Program-aware 调度",
+    "全局等待队列",
+    "KV cache",
+    "工具生命周期"
+  ],
+  "read": true,
+  "sections": [
+    {
+      "slug": "task",
+      "title": "Task",
+      "markdown": "多轮 agent 在 Reasoning 与 Acting 间交替，累积上下文使下一轮天然复用上一轮的 KV cache，且 Docker sandbox、端口、依赖等工具环境必须在整条轨迹内持续可用。现有部署将 vLLM/SGLang 与 Kubernetes 等工具编排器松耦合，并把每次 LLM 或工具调用独立调度，因而看不到跨轮的资源依赖。论文将由此产生的问题分为三类：工具执行期间的 KV cache thrashing、KV-aware 路由造成的跨 DP 节点内存失衡，以及工具环境的生命周期失配；前两者分别引入重复 prefill 与闲置 HBM，后者使已完成 workflow 的环境继续占据磁盘、端口和计算槽位。（论文 §2.1、§3）\n\n在 OpenHands RL rollout 的 90 分钟观测中，两个 H100 节点的内存使用差最高为 51%，差异超过 20% 的时间超过 37 分钟；因 KV thrashing，单请求端到端延迟最高膨胀 7.14 倍。任务目标不是替换推理引擎或工具编排器，而是在二者之间加一个能以完整 workflow 调度 GPU KV、CPU/磁盘和远程工具的运行时层，以持续 throughput 为主要目标。（论文 §3.1–§3.3，Figure 1–2）"
+    },
+    {
+      "slug": "insight",
+      "title": "Insight",
+      "markdown": "1. **Agent workflow 应成为持久的调度单元，而非带 session ID 的请求序列**：`program_id` 让运行时可同时获知上下文长度、执行相位、节点位置和工具依赖，从而区分“等工具返回”与“已终止”。只依赖 session/prefix 路由无法提供这些状态。（论文 §4.1、Appendix B.2）\n2. **KV cache 的优化目标是同时控制重算、空闲缓存和跨节点闲置，而不是单独最大化 hit rate**：对长尾工具调用，始终 pin KV 虽提高 hit rate，却会把 HBM 用于空等；对短工具调用，过早驱逐又造成整段历史 reprefill。时间衰减将两类成本置于同一准则下。（论文 §4.2、§4.3.1、Appendix D）\n3. **暂停后的 program 可放弃原节点亲和性**：被 Pause 后其 KV 已释放，重算成本不再依赖原节点；共享的全局等待队列即可把它 Restore 到任一有容量的 DP replica，同时避免其他节点空闲、队列中仍有等待 program。（论文 §4.3.2）"
+    },
+    {
+      "slug": "novelty",
+      "title": "Novelty",
+      "markdown": "**有新意：**\n\n- **Program abstraction 统一异构资源**：用 `P=⟨ID,c,T,L,τ,s⟩` 将 token 长度/KV footprint、工具环境集合、后端位置、Reasoning/Acting 相位和调度状态放入同一对象，使 GPU 调度与工具资源治理共享生命周期信号。（论文 §4.1，Table 1）\n- **面向 program 的全局等待队列**：周期性检测每个后端的容量压力，优先 Pause Acting program、优先 Restore Reasoning program，并允许已暂停 program 跨 DP 节点迁移；这把局部 KV locality 与集群容量均衡置于同一调度路径。（论文 §4.3，Figure 3）\n- **工具生命周期与 GPU 调度联动**：Terminated 状态触发 sandbox、socket、compute slot 的 hook-based 回收；当高优先级 program 接近 Restore 阈值时，先异步准备工具环境，再分配 GPU。（论文 §4.4）\n\n**有限：**\n\n- KV cache 保留、驱逐与工作流级调度并非新的系统需求：Autellix 已将多轮 workflow 建模为 GPU program，Continuum 已用工具时间预测和 HBM pinning 缓解 thrashing。ThunderAgent 的差异在于同时跟踪工具资源、以容量驱动 Pause/Restore，并使用全局队列处理 DP 失衡。（论文 §2.2、§4.3）\n- 运行时仍复用 OpenAI-style endpoint、vLLM/SGLang 后端和 Docker/工具编排器；接口层的新增信息主要是每个请求的 `program_id` 与结束时的 release signal。（论文 Appendix B.1–B.3）"
+    },
+    {
+      "slug": "solution",
+      "title": "Solution",
+      "markdown": "### **Program abstraction 与 STP 成本分解**\n\n每个 program 记录 `ID`、上下文 token 数 `c`、工具环境集合 `T`、后端位置 `L`、相位 `τ∈{R,A}` 与状态 `s∈{Active,Paused,Terminated}`。其中 `c` 直接对应活动 KV cache 的 footprint，`T` 让终止时的资源回收可追踪，`τ` 与 `s` 为调度器提供“正在推理、正在等工具或已暂停”的语义。（论文 §4.1，式 (1)）\n\n论文以 Space-Time Product（STP）度量一个阶段的 GPU 成本：\n\n$$\n\\mathrm{Cost}_x=\\int_0^{t_x}M_x(t)\\,dt.\n$$\n\n将 `M_x(t)` 用 KV token 数量近似后，总成本拆为：\n\n$$\n\\mathrm{Cost}_{total}\\approx\\mathrm{Cost}_{decode}+\\mathrm{Cost}_{prefill}+\\mathrm{Cost}_{recompute}+\\mathrm{Cost}_{unused}+\\mathrm{Cost}_{caching}.\n$$\n\n前两项是有效生成，后三项分别对应 KV thrashing、DP 内存失衡和 Acting 阶段的空闲 KV 占用；调度器据此最小化后三项。（论文 §4.2，式 (2)–(3)）\n\n### **周期性容量检测、时间衰减与 Pause/Restore**\n\n后端在固定间隔 `Δt` 检查活动 program 的 token 总量。基本 thrashing 条件为：\n\n$$\nC_{total}<\\sum_{p\\in\\mathcal L}c_p.\n$$\n\n当超出高水位 `λ_{max}C_{total}` 时，Pause 足量 program；当低于 `λ_{min}C_{total}` 时从队列 Restore，使恢复后仍不越过高水位。实现中两水位均设为 1，论文将共享 prompt 视为隐式 buffer。（论文 §4.3.1，式 (6)）\n\n为不长期 pin 等工具的 KV，Acting program 的有效 footprint 乘以 `f(t_q)`：\n\n$$\nC_{total}<\\sum_{p\\in\\mathcal L,\\tau=R}c_p+\\sum_{q\\in\\mathcal L,\\tau=A}c_qf(t_q).\n$$\n\n推导先假设等待额外 `Δ` 后的相对优先级只依赖 `Δ`，得到 `f(t+Δ)=f(t)f(Δ)`；令 `h(t)=\\ln f(t)`，即 `h(t+Δ)=h(t)+h(Δ)`。在 `f(0)=1`、`f(∞)=0` 与有界条件下，连续时间解为 `f(t)=e^{-λt}`，离散 tick 的解为 `f(k)=x^{-k}`；实验配置为 `Δt=5`、`f(t)=2^{-t}`。（论文 Appendix E.1，式 (12)–(18)；§5.1）\n\n### **Shortest-First 与全局等待队列**\n\n论文将已驱逐 program 的 reprefill STP 近似为 `c_i^2`：chunked prefill 下累计 KV 计算随迭代线性增加，而重算时间与上下文长度 `c_i` 成正比，积分得到平方关系。给定待释放容量 `ΔC`，其选择问题为 `min Σ_{i∈S}c_i^2`、s.t. `Σ_{i∈S}c_i≥ΔC`，据此优先 Pause 较短上下文；Restore 评分为 `1/c_P+𝟙(τ=R)`，Pause 评分为 `1/c_P+𝟙(τ=A)`，先按相位、再按长度排序。（论文 §4.3.1，式 (8)–(11)，Appendix E.2–E.3）\n\n所有 backend 共享一个等待队列。暂停操作解除 program 与原后端的绑定、释放其 KV；恢复操作将它放入任一有容量的后端。因此，暂停 program 的 placement 不再限制跨节点恢复，论文给出每个周期的闲置成本上界 `C_{unused}<c_{min}Δt`。（论文 §4.3.1–§4.3.2，式 (4)–(5)）\n\n### **工具资源管理**\n\n当 `s=Terminated`，lifecycle hook 立即回收 Docker sandbox、network socket 和 compute slot，避免已结束 workflow 的资源继续累积。调度器还监测全局等待队列；高 `S_{restore}` 的 program 接近可恢复时，先在 CPU/工具侧创建容器、安装依赖等环境，再等 GPU 侧 Restore，以重叠环境初始化和其他 program 的推理。（论文 §4.4）"
+    },
+    {
+      "slug": "flaw",
+      "title": "Flaw",
+      "markdown": "1. **Shortest-First 的全局最优证明与不可分割 program 的选择约束不一致**：Pause 定义为将一个完整 program 从 backend 解绑（式 (5)），而 Appendix E.3 的 exchange argument 把 `c_long` 拆成 `c_short+r` 来替换。`r` 并不是可独立 Pause 的 program，故该变换不一定可行。若候选长度为 `{1,2,100}`、需释放 `ΔC=100`，按最短优先累计会选 `{1,2,100}`，平方和为 10005；只选 `{100}` 已满足约束且平方和为 10000。论文未给出离散、不可分割 subset 的精确求解或近似界。（论文 §4.3.1，式 (5)、(9)–(11)，Appendix E.3）\n2. **水位参数没有在完整实验矩阵中展开**：`λ_{max}` 与 `λ_{min}` 被引入为 hysteresis window，但实现中两者均固定为 1；参数消融只报告单 H100、GLM-4.6、mini-SWEAgent 的 `Δt` 与 `f(t)=x^{-t}`。因此，context 增长速度、共享 prompt 大小、不同 GPU KV 预算下的水位选择未被展示。（论文 §4.3.1、§5.1、§5.4，Figure 6b）\n3. **Restore 排序未包含公平性或 deadline 项**：评分只由 `1/c_P` 与 Reasoning 指示项构成，长上下文或持续 Acting 的 program 在连续短 program 到达时可长期处于等待集合。评估报告 steps/min、KV hit rate 与平均端到端 latency，但未给出按 program 长度、等待年龄或租户划分的 completion-time 分布。（论文 §4.3.1，式 (10)–(11)；§5.1–§5.4）\n4. **调度组件的独立收益未完全拆开**：Figure 6a 将工具资源管理贡献描述为约 10% 的 latency 改善，并报告磁盘节省，但实验未分别量化 global queue、跨节点 Restore、Shortest-First、hook GC 与异步准备在同一 workload 下的增益与交互。现有 serving 比较聚合了这些组件的端到端结果。（论文 §5.2–§5.4，Figure 4–6）"
+    },
+    {
+      "slug": "thinking",
+      "title": "Thinking",
+      "markdown": "| 维度 | 评价 |\n| ---- | ---- |\n| 系统思维 | **强**：以 `P=⟨ID,c,T,L,τ,s⟩` 同时描述 GPU KV、节点 placement 和工具依赖，并让 §3 的三个资源问题分别映射到 §4.3–§4.4 的队列和 lifecycle 机制。（论文 §3–§4） |\n| 反馈/控制思维 | **中**：周期 monitor 基于实际 token footprint 触发 Pause/Restore，形成容量反馈；但 `Δt=5`、`f(t)=2^{-t}` 与水位均为静态配置，未按 online workload 反馈自适应。（论文 §4.3.1、§5.1） |\n| 实用主义 | **强**：保持 OpenAI-compatible API，仅增加 `program_id` 与结束 release signal；中间层可包裹既有 vLLM/SGLang 和工具编排器。（论文 §4.1、Appendix B） |\n| 理论严谨性 | **中**：STP 成本分解和时间衰减的半群推导给出明确假设；Shortest-First 证明将完整 program 当作可拆分容量，未覆盖离散 subset 约束。（论文 §4.2–§4.3，Appendix E） |\n| 实验严谨性 | **中**：覆盖 coding、routing、scientific agent，使用 GLM-4.6、Qwen3-235B 与 Qwen3-8B，并含两节点 rollout；公平性、水位参数和调度子组件的独立消融未列出。（论文 §5.1–§5.4） |\n\n### 延伸方向\n\n1. **不可分割 program 的容量释放优化**：将 Pause 选择建模为带重算代价的在线 knapsack，而非直接以长度排序。可在容量缺口小或 program 大小离散时比较 bounded dynamic programming、cost-per-token 贪心与短列表枚举。关键挑战是将求解开销限制在 `Δt` 的调度预算内，并同时处理 context 的持续增长。（论文 §4.3.1，式 (6)、(9)）\n2. **面向 workload 的在线参数控制**：根据每类工具的实际等待分布、context 增速和 hit/miss 结果，在线调整 `Δt`、`x`、`λ_{min}` 与 `λ_{max}`。目标是将时间衰减从统一的 `2^{-t}` 变成可随服务负载变化的容量控制器。关键挑战是探索期不能诱发新的 thrashing，且多租户工具延迟分布可能不同。（论文 §4.3.1、§5.4、Appendix C–D）\n3. **公平性约束的 program-aware 调度**：在 Restore score 中加入等待年龄、tenant quota 或 workflow deadline，测量不同长度 program 的 completion time、p95/p99 和 starvation rate。这样可验证短上下文优先与多租户服务目标是否冲突。关键挑战是公平性项会降低短 program 的重算成本优势，需要给出 throughput–fairness 曲线。（论文 §4.3.1、§5.1）\n4. **分层 KV 与跨节点迁移协同**：Pause 后可选择丢弃、CPU/SSD offload 或跨节点传输 KV，再由全局队列比较重算、I/O 和远端带宽成本。论文已观察到 generic PD disaggregation 在 agent 持续增长上下文时会加剧 thrashing，可据此研究 program-aware 的层级缓存与 P/D 资源分配。关键挑战是用统一代价模型覆盖 KV 传输与工具环境所在的 CPU 集群。（论文 Appendix A.2–A.3）"
+    },
+    {
+      "slug": "核心数据",
+      "title": "核心数据",
+      "markdown": "- 在 vLLM + Kubernetes、OpenHands RL rollout 的 90 分钟观测中，DP 节点最高内存失衡为 **51%**，超过 20% 的差异持续 **37 分钟以上**。（论文 §3.2，Figure 2a）\n- 无 program-aware 控制的 KV thrashing 可使单请求端到端延迟最高增至 **7.14×**。（论文 §3.1，Figure 1b）\n- 高并发 serving 相比 vLLM 提升 **1.48–3.58×**，相比 Continuum 提升 **1.17–3.31×**；确定性工具场景的 KV hit rate 接近 **100%**。（论文 §5.2，Figure 4–5）\n- 两个 8×H100 节点、`N=144` 的 GLM-4.6 rollout 中，mini-SWEAgent throughput 为 **375.4 → 671.8 steps/min（1.79×）**，OpenHands 为 **69.1 → 270.8 steps/min（3.92×）**。（论文 §5.3，Table 2）\n- 工具资源管理约占平均端到端 latency 改善的 **10%**，并带来 **4.2×** 磁盘内存节省。（论文 §5.4，Figure 6a）"
+    },
+    {
+      "slug": "架构速览",
+      "title": "架构速览",
+      "markdown": "```text\nAgent client (OpenAI API + program_id)\n                  |\n                  v\n       +-------------------------+\n       | ThunderAgent middleware |\n       | ProgramState: ID,c,T,L, |\n       |               tau,s     |\n       +-----------+-------------+\n                   |\n     +-------------+--------------+\n     |                            |\n     v                            v\nGlobal program-aware        Tool resource manager\nwaiting queue               - async environment prepare\n- monitor every Delta t     - Terminated hook GC\n- Pause Acting / Restore R  - sandbox, port, disk reclaim\n- shortest-first selection\n- restore to any DP node\n     |\n     +------------+---------------+\n                  v\n        vLLM / SGLang DP backends\n        KV cache + GPU capacity view\n```"
+    }
+  ]
+}

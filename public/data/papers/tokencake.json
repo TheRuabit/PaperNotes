@@ -1,0 +1,60 @@
+{
+  "slug": "tokencake",
+  "title": "TokenCake: A KV-Cache-centric Serving Framework for LLM-based Multi-Agent Applications",
+  "arxivId": "2510.18586v4",
+  "arxivUrl": "https://arxiv.org/abs/2510.18586",
+  "date": "2026-08-21",
+  "codeUrl": null,
+  "categories": [
+    "Agent 推理优化"
+  ],
+  "keywords": [
+    "tool 调用空闲 KV",
+    "动态内存分区",
+    "critical inversion",
+    "预测上传"
+  ],
+  "read": false,
+  "sections": [
+    {
+      "slug": "task",
+      "title": "Task",
+      "markdown": "面向带外部 function call 的 LLM multi-agent application，TokenCake处理两类同时发生的 KV Cache 问题：agent 在工具调用期间保留其后续推理所需的 prefix，但这些空闲 KV blocks 继续占用 GPU；多个 agent 竞争有限 GPU cache 时，先到达的非关键 agent 可能驱逐 critical path 上 agent 的 cache，令后者重新 prefill。论文将前者定义为 temporal underutilization，后者定义为 spatial contention / critical inversion；在 Code-Writer 的峰值时段，停滞 agent 最多占用 KV pool 的 18.5%。任务由 workflow DAG、agent-tool interaction 与每个 function call 的生命周期共同定义，而非把请求视作彼此独立的 text generation。（论文 §1、§2.1，Figure 2、Figure 3）"
+    },
+    {
+      "slug": "insight",
+      "title": "Insight",
+      "markdown": "1. **Function call 是可观测的 cache 生命周期边界**：`call_start` 表明该 request 会产生可利用的空闲窗口，`call_finish` 表明 cache 将被重新需要；这使 offload 与 upload 可以由事件驱动，而不必等待通用 memory pressure 或 session inactivity。（论文 §4.1、Table 2）\n2. **释放 KV blocks 的收益取决于被谁使用**：仅把停滞 cache 移到 CPU 不能保证降低 application latency；若没有可在窗口内执行的 waiting request，或释放的空间未分配给关键路径，迁移只增加 PCIe 与调度开销。（论文 §4.2、§7.3）\n3. **workflow criticality 必须进入 memory admission**：DAG 的结构、join 处同步压力、等待时间与重算成本共同决定 cache 的优先级。请求排序只调整计算顺序，不能阻止非关键 cache 占满 blocks；因此优先级还用于为 critical agent type 保留内存。（论文 §5、§7.4）"
+    },
+    {
+      "slug": "novelty",
+      "title": "Novelty",
+      "markdown": "**有新意：**\n\n- 把 function-call start/finish 与 application DAG 同时暴露给 serving runtime，在同一 KV Cache 生命周期中协调 proactive offload、predictive upload 与 critical-path admission。（论文 §3、§4、§5）\n- 以 shared pool + critical-agent reserved pool 处理 critical inversion；reservation 按 GPU pressure、agent-type runtime state 与图结构动态更新，而非只改变 request queue 顺序。（论文 §5.1、§5.2）\n- offload 决策加入“能否把释放 blocks 转化为有用的 waiting work”的可行性门控，且 upload budget 先扣除 critical waiting demand，使 temporal 与 spatial scheduler 使用同一 pressure snapshot。（论文 §3.2、§4.2、§4.3）\n\n**有限：**\n\n- GPU-to-CPU KV Cache migration、reactive offload 与 remote KV Cache 已由 Mooncake、CachedAttention、InferCept 等系统覆盖；TokenCake 的变化在于 function-call awareness、预测上传和与 graph priority 的联动。（论文 §2.2、Table 2、§8）\n- DAG-aware request scheduling 已见于 Parrot、Autellix 与 Hermes；本文将此类 context 从 compute scheduling 延伸到 KV Cache block reservation。（论文 §2.2、§8）\n- 运行时长预测使用 user estimate 与历史 EWMA 的加权组合；该预测器作为调度输入，论文未将其作为独立的预测模型或训练方法。（论文 §4.1）"
+    },
+    {
+      "slug": "solution",
+      "title": "Solution",
+      "markdown": "### **Function-call 事件驱动的机会式迁移与预测上传**\n\nFrontend 将 agent DAG、`FuncNode` 的 stage、`predict_time` 与 function-call 事件注册到运行时。`call_start` 后，Temporal Scheduler 将 request 标为 stalled 并评估 offload；`call_finish` 后，实际时长反馈到该 function type 的时长估计。每个 request 在 `running`、`pending-offload`、`offloaded`、`pending-upload`、`uploaded` 五个状态之间转换，GPU-CPU copy 在专用 stream 上异步提交，源 blocks 仅在复制完成后归还 free pool。（论文 §3.1、§4.1、§6.2、§6.3）\n\n对首次出现的 function call，时长使用 DAG 中用户给定的 `predict_time`，若未给定则使用系统保守常数；产生历史观测后，估计由用户值和历史 EWMA 加权：\n\n$$\nt_{estimate}=\\alpha t_{user}+(1-\\alpha)t_{history}.\n$$\n\n其中 \\(\\alpha\\) 表示用户先验的权重，\\(t_{history}\\) 是该 function type 的历史估计。迁移的端到端成本由 block 数 \\(N_{blocks}\\) 决定：\n\n$$\nT_{transfer}=T_{offload}(N_{blocks})+T_{upload}(N_{blocks}),\\qquad\nT_{window}=T_{FC}-T_{transfer}.\n$$\n\n当 \\(T_{window}\\leq0\\) 时，停滞期无法覆盖迁移往返，直接拒绝；否则以 decode throughput \\(v_{throughput}\\) 将窗口换算为可容纳工作量 \\(N_{capacity}=T_{window}v_{throughput}\\)，在 waiting queue 中找出首个同时满足 block demand 与 token capacity 的 request。CPU 容量不足、没有 fit request、GPU pressure 低于阈值也会提前拒绝；剩余候选再按 pressure、block fit、upload safety、CPU capacity 与 criticality、near-completion、migration churn 评分。（论文 Eq. 1、Eq. 2、Algorithm 1、§4.2）\n\n上传按 \\(P_{upload}=I+U\\) 排序，其中 \\(I\\) 复用 Spatial Scheduler 的 request importance，\\(U\\) 是距预测完成时刻的 urgency。为避免 H2D upload 占用 critical waiting request 的容量，先计算：\n\n$$\nB_{upload}=\\max(0, B_{gpu}^{free}-\\max(0,D_{critical}-B_{shared}^{free})).\n$$\n\n单次仅预留一个 cache 剩余缺口的一半：\n\n$$\nB_{reserve}=\\min(B_{remain},\\lceil B_{deficit}/2\\rceil,B_{upload}).\n$$\n\n这使 destination blocks 随 scheduling step 逐步准备；若 tool 比预测更早返回，则立即上传以恢复 request。（论文 Eq. 3、Eq. 4、§4.3）\n\n### **动态内存分区与混合优先级**\n\nSpatial Scheduler 将 GPU KV Cache 划分为所有 agent 可访问的 shared pool 与仅 critical agent type 可访问的 reserved pool。每个更新周期先根据 \\(usage=\\mathrm{CurrentGpuUsage}/N\\) 调整保留比例 \\(\\rho\\)：usage 达 high watermark 时加 `step`，低于 low watermark 时减 `step`，再裁剪至 \\([\\rho_{min},\\rho_{max}]\\)。然后按 agent-type score \\(S_a\\) 选前 `critical_ratio` 的活跃类型，并将 \\(\\rho N\\) 个保留 blocks 分配为：\n\n$$\nshare_a=\\frac{1}{2}\\left(\\frac{\\mathrm{GpuUsage}(a)}{N}+\\frac{S_a}{\\sum_{a'\\in\\mathcal C}S_{a'}}\\right),\\qquad\nreserved[a]=share_a\\rho N.\n$$\n\n实现从 \\(\\rho=0.05\\) 起步；usage 超过 \\(0.75\\) 时以 \\(0.05\\) 增加，低于 \\(0.40\\) 时以 \\(0.05\\) 减少，范围为 \\([0.05,0.30]\\)。critical-agent ratio 为 \\(0.75\\)。（论文 Algorithm 2、§5.1）\n\n批次内部的 request priority 为：\n\n$$\nP_{req}=\\alpha_{struct}f_{struct}+\\alpha_{sync}f_{sync}+\\alpha_{aging}f_{aging}.\n$$\n\n\\(f_{struct}\\) 使用 depth 与 in/out-degree，\\(f_{sync}\\) 提升 join 前进度较慢的 branch，\\(f_{aging}\\) 汇合剩余图比例、queue wait time 与近完成压力。reservation 使用不同粒度的 type score：\n\n$$\nS_a=w_1P_a+w_2U_a+w_3H_a+w_4G_a.\n$$\n\n\\(P_a\\) 是静态结构优先级，\\(U_a\\) 汇集 preemption 与 waiting counts，\\(H_a\\) 以平均 token count、execution time、throughput 的对数压缩表示重算代价，\\(G_a\\) 表示活跃 request 的平均 graph position。这样同一 criticality 定义同时约束 upload、reserved capacity 与 admission。（论文 Eq. 5、Eq. 6、§5.2）"
+    },
+    {
+      "slug": "flaw",
+      "title": "Flaw",
+      "markdown": "- **工作流范围**：实验只实现 Code-Writer（11 个 agent type，频繁文件 I/O、search、test）与 Deep Research 两个 application；arrival 按 Poisson 分布生成，prompt 来自 ShareGPT 与 AgentCode。评测图为 static DAG；动态边仅在 Discussion 中描述为未来接入的元数据更新与概率模型方向，未给出动态拓扑的 latency、reservation accuracy 或 migration 数据。（论文 §7.1、§9）\n- **系统与比较边界**：模型为 Qwen2.5-14B/A100、Qwen2.5-32B/H20、Qwen2.5-72B/2×H20，offload destination 固定预留 100 GB CPU memory。Parrot 运行在其自身 runtime，因此与 TokenCake 的 6.5–8.9× 延迟差被论文标为 system-scope check，而不是 controlled experiment；Mooncake 使用 vLLM V1 connector 与 `kv_both` semantics。（论文 §7.1、§7.4）\n- **时长预测参数**：\\(\\alpha\\) 控制用户 `predict_time` 与历史 \\(t_{history}\\) 的权重，论文给出 Eq. 1 而未报告其取值或 sweep。敏感性实验的 tool-time noise scale 取 \\(s=0\\)、\\(0.25\\)、\\(0.5\\)；\\(s=0.25\\) 时 TokenCake 相对 agent-only 回退 8.3%，而 \\(s=0.5\\) 时因 feasibility gate 拒绝更多迁移而恢复为 3.4% 改进，未报告按真实 tool type 划分的预测误差分布。（论文 §4.1、§7.5，Figure 14）\n- **空间调度参数**：`critical_ratio=0.75` 决定进入 reserved pool 的 agent type 比例；\\(\\rho\\) 从 0.05 开始，以 0.05 步长在 usage 0.75/0.40 两个阈值处调节，并限制为 0.05–0.30；\\(\\alpha_{struct},\\alpha_{sync},\\alpha_{aging}\\) 与 \\(w_1\\ldots w_4\\) 控制两类优先级公式。论文没有报告这些 ratio、watermark、权重的消融；仅对 Temporal Scheduler 的 spatial-pressure threshold 0.05、0.06、0.08 与 request selection 做比较。（论文 §5.1、§5.2、§7.5，Figure 15、Figure 16）\n- **迁移平台参数**：迁移 microbenchmark 在 A100 PCIe、Qwen2.5-14B、1,024–5,120 tokens（64–320 blocks，每 block 16 tokens、3 MiB bfloat16）上进行。4,096 tokens 时 D2H 为 32.0 ms、H2D 为 31.7 ms、往返为 63.7 ms，而重算为 1,815 ms；论文未展示不同 PCIe/NVLink 拓扑、CPU NUMA placement、CPU memory capacity 或并发迁移数量下的带宽数据。（论文 §7.6，Figure 17）"
+    },
+    {
+      "slug": "thinking",
+      "title": "Thinking",
+      "markdown": "| 维度 | 评价 |\n| ---- | ---- |\n| 系统思维 | 强：Frontend API 将 DAG、function-call stage、时长元数据传给 runtime，并使 Temporal/Spatial Scheduler 共享 pressure snapshot；调度输入覆盖 application dependency 与 GPU/CPU block 状态。（论文 §3） |\n| 控制与反馈 | 强：function duration 由运行时观测更新，\\(\\rho\\) 根据 GPU usage 以 watermarks 和步长闭环调整；两个机制分别处理时长预测与空间压力。（论文 §4.1、§5.1） |\n| 资源经济性 | 强：offload 前要求迁移窗口、waiting-request fit 与 upload safety 同时成立；CPU block pool 通过 fixed-size free list 回收 blocks，避免高频迁移触发系统 allocator。（论文 §4.2、§6.3） |\n| 经验验证 | 弱：评测使用两种静态 application、三种 Qwen2.5 配置；动态 graph、多 GPU 性能、跨平台迁移与 priority/reservation 参数的敏感性未呈现完整实验。（论文 §7、§9） |\n\n### 延伸方向\n\n1. **基于置信区间的 function-time 调度**：按 function type 维护分位数或 prediction interval，而非仅用单一 \\(t_{estimate}\\)。gate 可把 interval 下界用于迁移可行性、把上界用于 upload reservation，覆盖 Figure 14 中中等误差通过门控但引发损失的区间。关键问题是冷启动时如何结合 `predict_time`、历史长尾与 workload drift。（论文 §4.1、§7.5）\n2. **动态 DAG 的概率化 reservation**：将新分支、跳过分支和条件调用编码为下一跳的发生概率与预计 KV demand，并在 reservation update 中使用预期需求。这样可把论文 §9 的 runtime metadata update 扩展为资源计划输入。关键问题是错误预测不能让未发生的 branch 长期占用 critical pool。（论文 §9）\n3. **多层 KV Cache destination**：在 CPU pool 之外，将邻近 GPU/NVLink、remote KV store 和 CPU 作为层级目标，按预计空闲时长、传输带宽、criticality 与 destination pressure 选择层级。Temporal Scheduler 已具备 event-driven window 与 block-level lifecycle，Spatial Scheduler 可扩展 pressure snapshot 的每层容量。关键问题是跨设备 reservation、共享前缀去重和上传 deadline 的一致性。（论文 §5、§6.3、§9）\n4. **多租户公平性与 SLO**：现有 \\(P_{req}\\) 的 aging 和 synchronization pressure 可加入 tenant quota、application deadline 与 tail-latency budget，使 reserved pool 不由高 fan-out application 长期主导。评测需同时报告每个 tenant 的 completion time、P95/P99 与 KV block share。关键问题是 critical-path protection 与 quota 约束冲突时的 admission policy。（论文 §5.2、§7.1）\n5. **跨 workload 与模型的可复现实验**：增加 MoE、long-context、真实 tool trace、不同 GPU interconnect 和 CPU memory 配置，并公开 function duration、cache block、migration 与 reservation 的时间序列。此类 trace 可验证 prediction gate 的输入分布与 Figure 17 的平台依赖。关键问题是 agent framework、tool server 与 serving runtime 的版本组合需要统一记录。（论文 §7.1、§7.5、§7.6）"
+    },
+    {
+      "slug": "核心数据",
+      "title": "核心数据",
+      "markdown": "- Code-Writer D1、Qwen2.5-14B、1.0 QPS：TokenCake 相对 vLLM 将平均端到端 latency 降低 **47.06%**。（论文 §7.2，Figure 9）\n- Qwen2.5-14B Code-Writer：GPU KV Cache utilization 为 **85.8–87.0%**，vLLM 为 69.9–74.1%，最高相差 **16.9 percentage points**；Qwen2.5-32B、1.0 QPS 下为 **79.6%** 对 53.5%。（论文 §7.2，Figure 10）\n- 组件消融（20 applications、1.0 QPS、0.5 GPU memory utilization）：baseline total latency 502.2 s，agent-only 424.8 s，offload-only 403.1 s，full TokenCake **344.6 s**；full 的 swap volume 比 offload-only 少 **51%**。（论文 §7.3）\n- Mooncake 对比：0.5 QPS 时 TokenCake 384 s，Mooncake 533 s，TokenCake 相对 Mooncake 降 **28.0%**，throughput 为 **0.0124 req/s** 对 0.0090 req/s。（论文 §7.4，Figure 12）\n- A100 PCIe、4,096 tokens：offload 32.0 ms，upload 31.7 ms，往返 **63.7 ms**；重算 1,815 ms，为往返的 **28.5×**，全长度范围为 26.8–37.5×。（论文 §7.6，Figure 17）"
+    },
+    {
+      "slug": "架构速览",
+      "title": "架构速览",
+      "markdown": "```text\nApplication DAG + FuncNode(stage, predict_time)\n                  │ call_start / call_finish\n                  ▼\n             Frontend API\n                  │ shared pressure snapshot\n       ┌──────────┴──────────┐\n       ▼                     ▼\nTemporal Scheduler     Spatial Scheduler\noffload / predict H2D  request priority / reservation\n       │                     │\n       └──── GPU KV Cache pools ────┘\n             shared + critical reserved\n                  │\n           CPU block pool / prefix index\n```"
+    }
+  ]
+}

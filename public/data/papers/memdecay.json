@@ -1,0 +1,54 @@
+{
+  "slug": "memdecay",
+  "title": "MemDecay: Region-Aware KV Cache Eviction for Efficient LLM Agent Inference",
+  "arxivId": "2607.10582",
+  "arxivUrl": "https://arxiv.org/abs/2607.10582",
+  "date": "2026-07-12",
+  "codeUrl": "https://github.com/venkateshamatam/memdecay",
+  "categories": [
+    "KV Cache 压缩与驱逐"
+  ],
+  "keywords": [
+    "Agent 轨迹",
+    "区域感知驱逐",
+    "lifetime 差异"
+  ],
+  "read": false,
+  "sections": [
+    {
+      "slug": "task",
+      "title": "Task",
+      "markdown": "LLM agent 的执行轨迹包含 system instructions、plans、user turns、tool outputs、retrieved documents、scratchpad reasoning 等异质内容，KV cache 随轨迹增长成为内存瓶颈。现有 eviction 策略（H2O、StreamingLLM 等）对所有 token 施加相同的 attention/recency 规则，完全忽略了 orchestrator 层面已经具有的语义结构信息。问题的核心矛盾在于：不同功能区域的 token 具有量级不同的\"有用寿命\"，但现有方法将其一视同仁。这个问题在 agent 长程推理场景下尤其关键，因为轨迹长度远超普通多轮对话。"
+    },
+    {
+      "slug": "insight",
+      "title": "Insight",
+      "markdown": "1. **Region lifetime 存在数量级差异且跨模型/上下文长度稳定**：system token 的注意力半衰期（148–189 decode steps）比 scratchpad（14–16 steps）大一个数量级，该层级关系在 1.5B/3B 模型和 450/1700 token 上下文下完全一致。这不是猜测——论文用 4,320 次 eviction probe 的实测数据证明了这一点。\n2. **衰减应作为可控的调度过程而非内存压力的副产品**：将遗忘建模为 region-specific 的指数衰减 + attention 触发的时钟重置，使得 token 的保留优先级随时间平滑下降，同时持续被关注的 token 可以\"续命\"。这比 keep-or-drop 的二元决策精细得多。\n3. **Pinning 保证 system instruction 存活，但 decay prior 会驱逐最老的 unpinned 事实**：这是论文最诚实的自我诊断——结构先验在保护 system 区域上有压倒性优势，但在 user 区域的早期事实上完全输给 H2O 的 attention-based retention。"
+    },
+    {
+      "slug": "novelty",
+      "title": "Novelty",
+      "markdown": "**有新意：**\n- 将 orchestrator 的 region 标签作为 KV cache eviction 的一等信号，这是 agent-aware cache management 的一个具体且可落地的方案\n- 提出 region-conditioned attention lifetime 的标定协议（log-linear 衰减模型 + leave-one-scenario-out 拟合），用实测数据而非直觉来设置衰减率\n- 跨两个模型规模、两个上下文长度的系统性测量，发现 retrieval 区域的默认 fast-decay 假设被实测数据推翻——retrieval 实际是最长寿的 movable region\n\n**有限：**\n- 衰减公式 `s_i(t) = b_r * exp(-λ_r * Δt) + α * a_i` 本身是经典指数衰减 + 线性加权的组合，不构成方法论创新\n- Page-granularity eviction 和 pinned regions 是 serving 系统中的标准做法（PagedAttention 原生支持）\n- Region 标签依赖 orchestrator 提供，这在实际部署中要求 SGLang 等框架的支持，当前尚无成熟通道\n- 与 concurrent work RoleKV 的定位高度相似，区别主要在 lossy within-context eviction vs. cross-request resident management"
+    },
+    {
+      "slug": "flaw",
+      "title": "Flaw",
+      "markdown": "1. **模型规模和上下文长度严重不足**：仅测试 1.5B 和 3B 模型，上下文最长 1,700 tokens。这远远不是 production agent 的规模——SWE-bench 级别的 coding agent 动辄 32k+ tokens，8B/70B 模型是主力。论文的结论（region hierarchy 稳定、recency 崩溃）在更大规模下是否成立完全是未知数。\n2. **自建评估框架，未在标准 benchmark 上测试**：8 个 scenario、每个 3 个 variant、4 个 planted facts——这是高度受控的合成测试。没有 RULER、LongBench、SWE-bench 等标准长上下文 benchmark 的结果，也没有真实 agent trace 的测试。recall 指标要求 gold value 在 generated text 中出现（exact token match），这比实际使用中的语义 recall 严格得多。\n3. **α（attention 权重，论文固定为 0.5）的消融显示完全不敏感**：α ∈ {0.2, 0.5, 0.8} 产生的 keep set 几乎相同。论文正确诊断了原因（page mean + EWMA 使得 α*a_i 比 structural term 低 1-2 个数量级），但这实际上意味着 attention term 当前是死代码——α 的选取毫无意义，整个公式退化为纯 structural prior + decay。\n4. **ρ（EWMA 平滑因子，固定为 0.9）未做任何敏感性分析**：ρ=0.9 意味着约 10 步后早期 attention 就被遗忘到 1/e，这与论文自身发现的 system token 半衰期 148+ steps 形成矛盾——EWMA 的遗忘速度远快于 region 的实际有用寿命。ρ 对 eviction 决策的影响完全未讨论。\n5. **τ（刷新阈值，设为 2/|K_t|）仅有 scaled form，未对比 fixed threshold**：scaled form 意味着随着 context 增长，刷新门槛越来越低，这可能是 retrieval 区域在长上下文中看起来更长寿的原因之一——区分\"真的更长寿\"和\"阈值变低导致更多刷新\"需要额外消融。\n6. **8 个 scenario 的 cluster bootstrap 置信区间宽度较大**：许多 cell 的 95% CI 跨度达 0.15-0.20，policy 间的差异经常落在重叠区间内。paired sign test 是更合适的统计量，但 8 个 scenario 的检验力有限。\n7. **Eager attention 的开销被低估**：scored decode 比 unscored 慢 2.7×（69.8ms vs 26.0ms），论文以\"k>1 可以缓解\"一笔带过，但未给出任何 k>1 的实验数据。在生产环境中这个开销可能是不可接受的。"
+    },
+    {
+      "slug": "thinking",
+      "title": "Thinking",
+      "markdown": "| 维度 | 评价 |\n|------|------|\n| 实验设计 | **强**：跨 2 模型 × 2 长度 × 3 变体的全因子设计，leave-one-scenario-out 标定，插入顺序的 interleave 控制——在小规模内做到了严谨。但规模太小，外部效度弱。 |\n| 系统思维 | **强**：将 eviction 建模为 page-granular 的优化问题（公式 1），考虑了 straddle pages、pinned regions、与 PagedAttention 的对接。不是\"又一个 scoring function\"而是对 serving stack 的系统性思考。 |\n| 诚实性 | **强**：论文明确区分\"one clear win\"（pinning）和\"one clear loss\"（unpinned recall），在 abstract 和 discussion 中都给出了 diagnosed mechanism。这种不夸大结果的写法在 ML 论文中少见。 |\n| 理论严谨性 | **弱**：公式 1 的 token-level 优化和公式 5 的 page-level 贪心之间的 gap 被提及但未量化；page straddle 的\"最多一个 page\"假设在 region 很短时不成立。 |\n| 实用主义 | **弱**：仅在合成场景上验证，未触及任何真实部署条件；α 死代码的诊断很好但未提供替代方案的实验数据。 |\n| 局限 | 作者的思维品质体现在严格的实验纪律和诚实的结果报告上，但受限于独立研究者的资源，无法在有意义的规模上验证。 |\n\n### 延伸方向\n\n1. **Magnitude normalization of attention term**：论文自身最明确指出的方向。将 α*a_i 替换为 α*(a_i / (1/|K_t|))，使 attention 项相对于均匀注意力归一化，可能让老 token 被 attention 拯救而非被 structural prior 驱逐。关键挑战：归一化后的量纲与 structural prior 的匹配，以及如何在不同 context length 下保持稳定。\n2. **在线自适应衰减率**：当前标定是离线的（leave-one-scenario-out），部署时需要代表性 workload 数据。如果衰减率能根据实际观测的 region-level refresh 频率在线调整，就摆脱了对 calibration data 的依赖。关键挑战：在线估计的收敛速度 vs. agent episode 的长度——短 episode 中可能来不及学到有意义的统计量。\n3. **8B+ 模型 × 真实 agent trace 的大规模验证**：SWE-bench coding agent、BFCL function-calling trace、browser agent 等真实 workload 下的 region lifetime 是否仍然呈数量级差异？关键挑战：真实 agent trace 的 region 标注需要 orchestrator 配合，且 trace 间的变异性远大于合成场景。\n4. **Dependency-aware eviction**：将 plan → tool outputs → evidence 的依赖链纳入 eviction 决策，联合保留或驱逐。关键挑战：依赖图的构建和维护需要额外的 orchestrator 接口，且依赖可能是隐式的。\n5. **Tiered degradation path**：先量化（high-score → low-precision）、再 offload（mid-score → host memory）、最后 drop（low-score），配合动态回捞。关键挑战：量化和 offload 的延迟开销需要在 serving latency budget 内。"
+    },
+    {
+      "slug": "核心数据",
+      "title": "核心数据",
+      "markdown": "- Region lifetime: system 半衰期 **148–189** steps，scratchpad **14–16** steps（跨所有设置稳定，差距 ~10×）\n- Pinning: MemDecay system probe recall **24/24**（short）、**21/24**（long），streaming **0–2/24**\n- Recency 崩溃: streaming non-sys recall 从 short tier 0.36 降至 long tier **0.01–0.13**\n- Unpinned recall（MemDecay 的弱点）: half budget non-sys recall **0.32**（short）、**0.22–0.28**（long），而 H2O 在 3B long 上达 **0.60**\n- 开销: scoring + page selection **0.27 ms**，eviction **4.2 ms**（466-token cache），但 scored decode 比 unscored 慢 **2.7×**"
+    },
+    {
+      "slug": "架构速览",
+      "title": "架构速览",
+      "markdown": "```\nAgent Orchestrator\n  │  region labels (system/plan/user/tool_in/tool_out/retrieval/scratchpad)\n  ▼\nLLM Decode Engine\n  │  append KV entries → region-aligned pages\n  │  sample attention at observation steps (every k steps)\n  ▼\nMemDecay Policy\n  ├── Attention EWMA:  a_i ← ρ·a_i + (1-ρ)·Ā_i\n  ├── Decay Clock:     Δt_i = t - t_i^ref  (reset on attention refresh)\n  ├── Retention Score: s_i(t) = b_r·exp(-λ_r·Δt_i) + α·a_i\n  ├── Page Score:      S_p(t) = mean(s_i for i in page p)\n  └── Eviction:        min-heap over non-pinned pages, evict lowest until |K| ≤ B\n       ↑\n       pinned: system region (never evicted)\n```"
+    }
+  ]
+}

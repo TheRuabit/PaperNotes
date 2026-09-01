@@ -1,0 +1,59 @@
+{
+  "slug": "mars",
+  "title": "MARS: Efficient, Adaptive Co-Scheduling for Heterogeneous Agentic Systems",
+  "arxivId": "2604.26963",
+  "arxivUrl": "https://arxiv.org/abs/2604.26963",
+  "date": "2026.04",
+  "codeUrl": "https://github.com/Afterglow231/MARS_preview",
+  "categories": [
+    "Agent 推理优化"
+  ],
+  "keywords": [
+    "异构协同调度",
+    "SLO 感知",
+    "workflow 优化"
+  ],
+  "read": false,
+  "sections": [
+    {
+      "slug": "task",
+      "title": "Task",
+      "markdown": "LLM serving 从单轮文本生成转向多轮 Agent 执行后，现有引擎架构假设崩塌：\n\n- **Session 长生命周期化**：反复在 GPU 推理 ↔ CPU tool 执行之间切换（论文 §2.2 Temporal Shift）\n- **KV cache 状态化**：驱逐要重建前缀，保留又挤占内存（论文 §2.1 Figure 3）\n- **优化目标转移**：token 吞吐量 → 端到端 workflow 完成时间（论文 §2.1 Dynamic SLO-Aware Goodput 定义）\n\n现有系统分为三类，各自只解决局部问题：传统吞吐引擎（FCFS）无视 session 依赖和混合资源需求；程序感知框架（Autellix）在应用层调度但对物理资源无感；工具感知系统（InferCept/Continuum）用静态启发式管理 KV 驻留，在动态负载下频繁失效（论文 §2.1）。论文提出 Dynamic SLO-Aware Goodput 指标，定量暴露了\"高吞吐但 goodput 崩溃\"的现象（论文 §2.1 Figure 2）。"
+    },
+    {
+      "slug": "insight",
+      "title": "Insight",
+      "markdown": "1. **两个结构性偏移（temporal + spatial）**：temporal 让 KV cache 从临时缓存变成悬挂的工作流状态，spatial 让资源足迹从 GPU-only 扩展到 GPU-CPU 耦合。InferCept 和 Continuum 各自只触及了一面（前者关注 KV 管理、后者关注 tool 边界），MARS 将两者统一为一个框架（论文 §2.2）。\n2. **碎片化控制必然失败**：GPU 压力、CPU 工具积压、KV 内存三者耦合——驱逐决策影响恢复延迟，恢复延迟影响 CPU 工具积压，CPU 积压又导致 GPU 空转。论文用 Figure 2 的 goodput 崩溃定量证明了这种耦合在 agent 场景下的严重程度（论文 §2.1）。\n3. **KV 分配不应是二元决策**：分配失败时先缩小 prefill chunk 到单 block 粒度做增量推进，把碎片化从硬故障变成暂时的服务粒度降低。Sarathi-Serve 的 chunked prefill 是在正常调度中分块（论文 §8 Related Work），MARS 的 chunk shrinking 是在分配失败时的降级策略（论文 §4.3），触发条件和目的不同。"
+    },
+    {
+      "slug": "novelty",
+      "title": "Novelty",
+      "markdown": "**有新意：**\n\n- Unified Information Stream 用 O(1) 轻量探针暴露 KV block 状态，将 GPU 和 CPU 侧的执行边界事件统一为结构化遥测流（论文 §4.1）\n- AIMD 控制环 + soft cap 用于 GPU-CPU 双压力准入，避免硬阈值的 admit/stop 振荡（论文 §4.2 Algorithm 1）\n- 调度优先级与驱逐策略对齐——低优先级 session 成为驱逐候选，其中大 KV footprint 优先释放（论文 §4.3）\n\n**有限：**\n\n- MLFQ 是 OS 经典调度算法移植，windowed MLFQ 加入了窗口配额和有界晋升，但核心多级反馈队列机制是经典设计（论文 §4.3）\n- chunk shrinking 与 Sarathi-Serve 的 chunked prefill 有关联，区别在触发条件（论文 §8）\n- AIMD 本身是 TCP 拥塞控制的经典范式，论文将其应用于 GPU-CPU 双压力的准入控制（论文 §4.2）"
+    },
+    {
+      "slug": "solution",
+      "title": "Solution",
+      "markdown": "### **Unified Information Stream**\n\n**机制描述**：Unified Information Stream 是一条低开销的遥测路径，为 GPU 推理引擎和 CPU tool 执行环境提供全栈可观测性。每当 session 切换执行状态时，系统发出结构化边界事件，携带跨轮次的稳定标识符。GPU 侧通过 O(1) 轻量探针读取调度器的 free-list 和 usage counters，直接以 KV block 为单位报告内存压力（而非字节级计数），避免 CPU-GPU 同步开销。CPU 侧不依赖硬件级 instrument，仅用两个粗粒度信号刻画主机压力：活跃 tool 调用数（backlog 累积）和每次 tool 执行时长（处理成本）。执行时长通过 EMA 平滑后传入控制面。控制面和内部调度器消费同一流，保证全栈一致的资源压力视图（论文 §4.1 Table 1）。\n\n**系统意义**：Unified Information Stream 是 MARS 外部控制面和内部调度器的共同基础。它将原本不透明的 GPU-CPU 相位转换变成显式控制信号，使准入控制和内部调度能在相位边界而非依赖粗粒度时长估算做出决策（论文 §4.1）。\n\n### **AIMD + Soft Cap 准入控制**\n\n**机制描述**：External Control Plane 由两个逻辑模块组成。Global Load Balancer 对等待队列做压力感知排序：默认按 KV block 估算升序排列（优先短 session）；CPU 过载时降序排列（偏向 GPU 重型 session，减少 tool 调用注入）；队列全为长 session 时切换为 KV-aware packing，按可用内存预算组装可行集合（论文 §4.2 Algorithm 1 PackQueue）。\n\nExternal Admission Controller 使用 AIMD 控制环自适应调整准入窗口 $W_{adm}$。设 $\\alpha > 0$ 为加性增量，$\\beta < 1$ 为乘性衰减因子，$W_{min}$ 为下界。每经过 $control\\_interval$ 时间间隔，若 CPU overloaded 或 KV overloaded，则执行乘性减；若 CPU 未过载且 KV 有余量，则执行加性增（论文 §4.2 Algorithm 1 UpdateWindow）：\n\n$$\nW_{adm} \\leftarrow\n\\begin{cases}\n\\max(W_{min},\\; W_{adm} \\times \\beta) & \\text{if overloaded} \\\\\nW_{adm} + \\alpha & \\text{otherwise}\n\\end{cases}\n$$\n\n最终准入预算为 $W = \\min(W_{adm}, W_{cpu}, W_{kv})$，其中 $W_{cpu}$ 由 CPU 侧信号推导，$W_{kv}$ 由 KV cache 可用 block 推导。KV 压力被翻译为 soft cap 而非硬阈值——随着内存余量消失，准入压力平滑放松，避免二元阈值导致的 admit/stop 振荡（论文 §4.2）。\n\n**设计来源**：AIMD 来自 TCP 拥塞控制范式。soft cap 机制借鉴了控制论中的滞回（hysteresis）设计。论文将两者组合用于 GPU-CPU 双压力的联合准入控制（论文 §4.2）。\n\n**系统意义**：External Control Plane 解耦了\"准入多少\"与\"内部如何调度\"，确保底层引擎不被迫进入病态的吞吐崩溃状态。Global Load Balancer 的排序策略在正常/CPU 过载/内存紧张三种状态下切换，匹配异构资源预算（论文 §4.2）。\n\n### **Priority-Aware Coordinator（Windowed MLFQ + 有界晋升）**\n\n**机制描述**：Priority-Aware Coordinator 用 Multi-Level Feedback Queue 替代 FCFS 调度，优先级由三个因素编码：初始 KV footprint、累积服务量、等待时间。小 context footprint 的 call 从更高基础优先级开始；消耗更多 GPU 服务的 call 逐步降级，防止长 session 反复霸占 decode 机会。为保持 liveness，MARS 引入有界晋升：等待过久的 call 自动提升优先级，避免 starvation。相同优先级结构也驱动驱逐策略——低优先级 session 成为驱逐候选，其中大 KV footprint 优先释放（论文 §4.3）。\n\n**设计来源**：MLFQ 是操作系统经典调度算法。论文的改动在于将优先级与 KV 驱逐对齐、加入窗口配额（token quota）和有界晋升机制，适配 agentic workload 的 GPU-CPU 交替特性（论文 §4.3）。\n\n**系统意义**：Priority-Aware Coordinator 控制\"谁先执行\"和\"哪些部分进度值得保留\"。消融实验显示去除该组件后平均延迟涨 2x–5x，重负载下长 prefill 直接与短 resumption 竞争，HoL blocking 灾难性地抵消了 warm resume 优势（论文 §6.5 Figure 13）。\n\n### **Opportunistic Co-Scheduler（Chunk Shrinking + Pinned Sessions）**\n\n**机制描述**：Opportunistic Co-Scheduler 处理逐 tick 的硬件约束（token 预算和 KV block 可用性）。核心设计是将分配从二元 admit-or-evict 决策转为渐进式：当 selected call 的 KV 分配失败时，不立即驱逐，而是先逐步缩小请求的 prefill token chunk，直到分配器能容纳，最细到单 block 粒度。该机制将瞬态碎片化从硬故障转为暂时的服务粒度降低。\n\n跨 GPU-CPU 边界时，当 call 切换到 host-side tool，MARS 在有界时间内保留其 KV state（pinned sessions）。保留决策在运行时比较两个量：warm resume 的延迟收益 vs 占用内存的机会成本。如果 chunk shrinking 仍无法为活跃请求争取足够 block，co-scheduler 优先回收 pinned sessions，再驱逐正在运行的 victim（论文 §4.3）。\n\n**系统意义**：Opportunistic Co-Scheduler 将调度优先级转化为逐 tick 的具体执行决策。消融实验显示去除该组件后在内存紧张突发负载（ILR-3/ILR-4）下延迟涨 1.5x–2x（论文 §6.5）。在轻负载（ILR-1, 0.5 req/s）下出现轻微性能反转——调度开销超过内存节省（论文 §6.5）。"
+    },
+    {
+      "slug": "flaw",
+      "title": "Flaw",
+      "markdown": "1. **缺形式化分析**。整个设计是启发式 + 控制环，没有排队论分析或理论 bound。AIMD 在 GPU-CPU 耦合场景下的收敛性缺乏证明，只有实验验证（论文 §4.2）。\n\n2. **启发式参数未做敏感性分析**，具体如下：\n   - **α（加性增量）**：控制 AIMD 准入窗口 $W_{adm}$ 的加性增长步长，论文未给出具体取值（论文 §4.2 Algorithm 1）。在突发流量场景下，α 过小导致恢复太慢、α 过大导致过冲振荡，缺乏对收敛速度与稳定性的 tradeoff 分析。\n   - **β（乘性衰减因子，β < 1）**：控制过载时准入窗口 $W_{adm}$ 的收缩比例，论文未给出具体取值（论文 §4.2 Algorithm 1）。β 决定了系统对突发压力的响应激进程度，但未做不同 β 值下的 goodput 对比。\n   - **control_interval**：控制 Admission Controller 检查并更新准入窗口 $W_{adm}$ 的时间间隔（论文 §4.2 Algorithm 1）。间隔过短导致控制面开销过大，过长导致对突发压力反应迟钝。论文未讨论其与请求到达率之间的关系。\n   - **EMA 衰减系数**：用于平滑 CPU tool 执行时长的指数移动平均（论文 §4.1）。衰减系数决定了对历史执行时长的\"记忆长度\"，在工具时长分布突变（如从快速 file_editor 切换到长时间 terminal 执行）时可能产生滞后。\n   - **CPU overloaded 判定阈值**：决定何时触发乘性减。论文描述为\"active tool numbers + execution durations\"的组合（论文 §4.1），但未明确阈值如何设定，也未讨论不同工具类型（轻量 vs 重量）是否需要差异化判定。\n   - **Pinned session 保留时长**：Opportunistic Co-Scheduler 在 tool 执行期间有条件保留 KV，但保留多久、何时判定\"warm resume 不划算\"的边界条件未量化（论文 §4.3）。\n\n3. **Baseline 偏弱**。四个 baseline 中 FCFS 是 vLLM 默认策略，明显不是为 Agent 设计的（论文 §6.2）。真正的竞争者只有 Autellix 和 Continuum。缺少与 SGLang（RadixAttention + 前缀复用）、Llumnix（动态调度）、Parrot（语义变量感知）的对比（论文 §7 提到了 Llumnix 和 DAG-aware 框架但未做对比）。\n\n4. **公平性缺失**。显式优先全局进度意味着长 session（大 prefill）在持续高负载下可能被有界晋升机制无限推迟。论文承认公平性是 open problem，经典 DRF 假设静态资源需求，而 agentic session 的 GPU-CPU 交替振荡需要新的公平份额定义（论文 §7）。\n\n5. **线性假设**。调度模型假设 session 是线性 ReAct 循环（论文 §7），但 Tree of Thoughts、多 Agent 协作产生 DAG 拓扑，优先级定义和关键路径分析需要重新设计。\n\n6. **Tool 执行被当黑盒**。论文只优化 GPU-CPU 之间的调度，但 tool 执行本身（沙箱冷启动、文件 I/O、网络 API 调用延迟）也是关键路径的一部分。Unified Information Stream 中只有粗粒度信号（tool_num / tool_start/end）（论文 §4.1），无法区分\"正在计算\"和\"等待 I/O\"。\n\n7. **模型规模有限**。最大模型为 120B（GPT-OSS-120B），在 70B+ 或 MoE 模型上 KV cache 压力更大、attention 模式可能不同，co-scheduling 策略是否仍然有效未被验证（论文 §6.2）。"
+    },
+    {
+      "slug": "thinking",
+      "title": "Thinking",
+      "markdown": "| 维度 | 评价 | 依据 |\n| ---- | ---- | ---- |\n| 系统思维 | 强 | 识别出 GPU 压力、CPU 工具积压、KV 内存三者耦合，用 Unified Information Stream 统一遥测（论文 §4.1） |\n| 控制论思维 | 强 | 借鉴 TCP AIMD 的加性增/乘性减范式用于准入控制（论文 §4.2），用 soft cap 替代硬阈值避免 admit/stop 振荡 |\n| 工程实用主义 | 强 | 选择在 vLLM 上增量实现（5300 行 Python）（论文 §5），复用 PagedAttention 的 block 分配器，通过 OpenAI-compatible API 注入 session ID，不重写底层 attention/kernel |\n| 形式化 | 弱 | 无排队论 bound 或收敛性证明，只有实验验证（论文 §4.2） |\n| DAG 适配 | 弱 | Priority-Aware Coordinator 的优先级只编码\"初始 KV 尺寸 + 累积服务量 + 等待时间\"三因素（论文 §4.3），无法表达 DAG 拓扑中的分支关键路径（论文 §7） |\n| Tool 感知粒度 | 弱 | CPU 侧只有 tool_num 和 tool_start/end 两个粗粒度信号（论文 §4.1），无法区分计算密集型和 I/O 等待型 tool |\n\n### 延伸方向\n\n1. **自动参数调优**：将 AIMD 的 α、β、control_interval 从固定超参改为在线自适应——基于 goodput 反馈或 PID 控制器自动调节，消除人工调参负担。关键挑战：控制环嵌套可能引入新的不稳定性。\n2. **DAG-aware 调度**：将优先级模型从线性 ReAct 扩展到 DAG 拓扑，编码分支关键路径和共享前缀。论文 §7 提出两层架构方向：DAG-aware 前端提供语义提示，MARS 后端消费这些提示做双压力准入和物理执行。关键挑战：DAG 的在线 frontier 宽度估计和分支优先级分配。\n3. **多租户公平性**：在 MARS 的进度优先框架上叠加 progress-aware fairness 模型。经典 DRF 假设静态资源需求（论文 §7），需要为 agentic session 的 GPU-CPU 交替振荡设计新的公平份额定义。关键挑战：公平性与全局 goodput 的 Pareto 权衡。\n4. **Tool 执行分级感知**：在 Unified Information Stream 中增加 tool 类型标签和细粒度状态（计算中 / 等待 I/O / 等待网络），让调度器区分 CPU-bound tool（应限制并发）和 I/O-bound tool（可高并发）。关键挑战：需要 tool 运行时的轻量级 profiling。\n5. **多 GPU / 分布式扩展**：将 External Control Plane 提升为集群级网关，聚合多节点的双压力遥测做全局准入（论文 §7）。关键挑战：KV cache 局部性与计算负载的权衡——co-locate 最大化 KV 复用，但动态迁移可缓解局部 CPU 热点，迁移开销本身对多轮 agentic loop 的影响未被量化。"
+    },
+    {
+      "slug": "核心数据",
+      "title": "核心数据",
+      "markdown": "- 端到端延迟降低最多 **5.94x**（论文 §6.3 H200 + Qwen3-Coder-30B）\n- OpenHands 任务完成加速最多 **1.87x**（论文 §6.4）\n- Goodput：重负载下 baseline 崩至近零，MARS 维持 0.015–0.018 req/s（论文 §6.3 Figure 9）\n- 消融：Priority-Aware Coordinator 影响最大，去除后延迟涨 **2–5x**（论文 §6.5 Figure 13）"
+    },
+    {
+      "slug": "架构速览",
+      "title": "架构速览",
+      "markdown": "```\nUnified Info Stream (gpu_submit/end, tool_num/start/end, window_update)\n        │\n        ▼\nExternal Control Plane\n  ├─ Global Load Balancer  ← 压力感知队列排序（正常/CPU过载/内存紧张三种模式）\n  └─ Admission Controller  ← AIMD 准入窗口 min(W_adm, W_cpu, W_kv)\n        │\n        ▼\nInternal Agent-Centric Scheduler (数据面)\n  ├─ Priority-Aware Coordinator  ← Windowed MLFQ + 有界晋升 + 驱逐对齐\n  └─ Opportunistic Co-Scheduler ← chunk shrinking + pinned sessions\n```"
+    }
+  ]
+}
