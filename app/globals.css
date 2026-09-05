@@ -33,7 +33,7 @@
 
 :root {
   --radius: 1rem;
-  --background: #ffffff;
+  --background: #F5F7FA;
   --foreground: oklch(0.23 0.035 256);
   --card: oklch(1 0 0);
   --card-foreground: var(--foreground);
@@ -70,7 +70,7 @@ a { color: inherit; text-decoration: none; }
 .site-header, .reader-sticky-bar {
   position: sticky; top: 0; z-index: 30;
   border-bottom: 1px solid var(--border);
-  background: var(--background);
+  background: #FFFFFF;
 }
 .site-header-inner, .reader-sticky-inner, .library-main, .paper-hero, .reader-layout, .reader-footer {
   width: min(1440px, calc(100% - 2rem)); margin: 0 auto;
